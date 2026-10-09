@@ -86,8 +86,11 @@ function DependenciesBody() {
         <div>
           <h1 className="text-base font-semibold tracking-tight">Dependencies</h1>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Import and call relationships resolved across {formatNumber(Number(stats.files ?? 0))} files. Circular
-            dependencies, hubs and isolated modules are computed from this graph.
+            Import and call relationships resolved across {formatNumber(Number(stats.files ?? 0))} code modules.
+            Circular dependencies, hubs and isolated modules are computed from this graph.
+            {Number(stats.excluded_files ?? 0) > 0
+              ? ` ${formatNumber(Number(stats.excluded_files))} documentation, data and asset files are excluded - they cannot import anything.`
+              : ""}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -130,7 +133,12 @@ function DependenciesBody() {
           icon={AlertOctagon}
         />
         <StatCard label="Hubs" value={Number(stats.hubs ?? payload.hubs.length)} hint="High fan-in / fan-out files" />
-        <StatCard label="Isolated" value={Number(stats.orphans ?? orphans.length)} hint="No resolved edges (may be entrypoints or configs)" icon={Unplug} />
+        <StatCard
+          label="Isolated"
+          value={Number(stats.orphans ?? orphans.length)}
+          hint="Code modules with no resolved edges (may be entrypoints or dynamically loaded)"
+          icon={Unplug}
+        />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">

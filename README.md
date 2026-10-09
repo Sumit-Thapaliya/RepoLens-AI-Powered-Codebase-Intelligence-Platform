@@ -21,8 +21,8 @@ screen is invented, and anything heuristic is labelled as such.
 | **Overview** — repo header, KPI cards, architecture graph, AI insights, recent runs | ![](docs/screenshots/overview.png) |
 | **Architecture** — layer graph (frontend → API → services → data) with per-layer detail | ![](docs/screenshots/architecture.png) |
 | **Workflows** — auto-traced flows with step and swimlane sequence views | ![](docs/screenshots/workflows.png) |
-| **Dependencies** — file/module graph, cycles, hubs, isolated modules | ![](docs/screenshots/dependencies.png) |
-| **APIs** — method, path, handler, service, auth, source file | ![](docs/screenshots/apis.png) |
+| **Dependencies** — code-module graph, cycles, hubs, isolated modules, scope note | ![](docs/screenshots/dependencies.png) |
+| **APIs** — method, path, handler, service, auth, provenance badges, source filter | ![](docs/screenshots/apis.png) |
 | **Database** — ER diagram, models, fields, migrations, query inventory | ![](docs/screenshots/database.png) |
 | **Code Explorer** — Monaco with symbol intelligence and jump-to-file | ![](docs/screenshots/explorer.png) |
 | **Quality** — complexity, coupling, cycles, duplication, missing tests (heuristics) | ![](docs/screenshots/quality.png) |
@@ -30,11 +30,13 @@ screen is invented, and anything heuristic is labelled as such.
 | **AI Chat** — grounded answers with traced chains and citations | ![](docs/screenshots/chat-answer.png) |
 | **Search** — semantic + exact text search over the indexed snapshot | ![](docs/screenshots/search-results.png) |
 | **Reports** — generated README/API/onboarding docs and full JSON export | ![](docs/screenshots/docs.png) |
+| **Library repos** — no route declarations means no invented API surface | ![](docs/screenshots/apis-library.png) |
 
-*(Screenshots are captured from real analyses: `fastapi/full-stack-fastapi-template` — 202 files, 23
-endpoints, 23 workflows, 35 heuristic findings — and `pallets/flask` — 217 files, 36 endpoints,
-26 workflows, 1 circular dependency. The `*-flask.png` / `overview-flask.png` captures show the second
-repository.)*
+*(Screenshots come from real runs: `fastapi/full-stack-fastapi-template` — 202 files, 143 code modules,
+480 resolved edges, 12 isolated modules, 23 endpoints, 23 workflows, 35 heuristic findings, health 88 —
+and `pallets/flask` — 217 files, 79 code modules, 1 circular dependency, 1 isolated module, 33 endpoints
+(all from example/test apps), 26 workflows, health 91. The `*-flask.png` captures show the second
+repository, where provenance badges and scope notes are most visible.)*
 
 ---
 
@@ -85,7 +87,7 @@ GitHub URL ──▶ validate + metadata (GitHub API)
             ──▶ parse each file      tree-sitter for 20+ languages, Python AST for .py
                                      └─ per-file failures are warnings, never fatal
             ──▶ resolve imports      internal / external / unresolved, router prefixes
-            ──▶ build graph          file nodes, import + call edges, cycles, hubs
+            ──▶ build graph          code-module nodes, import + call edges, cycles, hubs
             ──▶ detect               frameworks, endpoints, DB models/queries, layers
             ──▶ trace workflows      from routes/handlers/UI entry points through services to data
             ──▶ quality + insights   complexity, coupling, duplication, missing tests
@@ -96,6 +98,25 @@ GitHub URL ──▶ validate + metadata (GitHub API)
 Every stage reports progress and is cancellable; each artefact is stored so the UI never re-analyses
 to answer a question. Re-running the same repository creates a *new* analysis (the previous 8 runs per
 repository are kept and switchable), which is what makes "what changed between runs" possible later.
+
+### Scope rules (what is *not* counted)
+
+Analysis is deliberately scoped so the numbers describe the code, not the repository's furniture:
+
+* **Documentation and assets stay out of the graph.** Only files that can carry dependencies become
+  graph nodes (tree-sitter languages plus `.vue`/`.svelte`); `docs/`, `.rst`, Markdown, data and image
+  files are indexed and searchable but never counted as "isolated modules" or "hubs". The Dependencies
+  page reports how many files were excluded (`graph_stats.excluded_files`).
+* **Endpoints are deduplicated by `method + path`.** When the same URL is declared in several files the
+  application's own declaration wins and every other declaration is kept in `declarations[]` with an
+  `is_example` / `is_test` flag, so a library repository (Flask, requests) honestly reports "33
+  endpoints, all declared in example or test applications" instead of inventing an API surface.
+* **Workflows are scoped the same way** (`scope: application | example | test`, plus a `scope_note`),
+  and a URL inside a tutorial is never mistaken for a client call site.
+* **Language coverage is complete.** Common non-code extensions (`.rst`, `.txt`, `.toml`, `.ini`,
+  `.bat`, `.svg`, certs, dotfiles, `Dockerfile`, `Makefile`) are labelled rather than lumped into
+  "Other" - on `pallets/flask` that moved 104 files / 15,334 LOC out of "unknown", and the Languages
+  card dims entries that are indexed for search but not parsed.
 
 ### Grounding rules
 
@@ -152,9 +173,9 @@ Everything listed here is implemented and exercised against real repositories. N
 | Repo import: URL validation, metadata, branch selection, progress, cancel, delete | ✅ |
 | Overview: languages, frameworks, counts, DB tech, deps, status, insights, recent runs | ✅ |
 | Architecture: React Flow layer graph, zoom/pan/click, per-layer files & connections | ✅ |
-| Workflows: categories, step view, sequence view, confidence, evidence, jump-to-source | ✅ |
+| Workflows: categories, step view, sequence view, confidence, evidence, scope badges, jump-to-source | ✅ |
 | Dependencies: file/module views, import + call edges, cycles, hubs, isolated modules | ✅ |
-| APIs: method/path/handler/controller/service/auth, evidence, Markdown export | ✅ |
+| APIs: method/path/handler/controller/service/auth, provenance badges, source filter, evidence, Markdown export | ✅ |
 | Database: technologies, ER diagram, models+fields, migrations, query inventory | ✅ |
 | Code Explorer: Monaco, file tree, symbol jump, references, imports/dependents, impact link | ✅ |
 | AI Chat: grounded answers, traced chains, citations, retrieval evidence, follow-ups | ✅ (LLM or extractive) |
@@ -200,6 +221,17 @@ pip install -e packages/shared -e packages/parser -e packages/graph -e packages/
   every view says where its knowledge stops (`trace_truncated`, `notes`, `evidence`).
 * Layers are derived from path conventions and resolvable edges. They are marked *heuristic*.
 * Language support is deepest for Python, TypeScript/JavaScript/TSX, Go, Java, Ruby, PHP, Rust, C#,
-  C/C++, SQL, Lua; other text files are indexed (searchable) but not parsed into symbols.
+  C/C++, and Vue/Svelte; SQL, Prisma, GraphQL, Proto, YAML/JSON/TOML/INI, Markdown, reStructuredText,
+  shell, Dockerfiles and Makefiles are indexed (searchable) but not parsed into symbols.
+* Verified on three real repositories (same pipeline, no configuration):
+  * `fastapi/full-stack-fastapi-template` — 202 files, 143 code modules (59 docs/assets excluded),
+    480 import/call edges, 12 isolated modules, 0 cycles, 23 endpoints, 23 workflows, health 88.
+  * `pallets/flask` — 217 files, 79 code modules (138 excluded), 254 edges, 1 isolated module,
+    1 circular dependency, 33 endpoints *(14 example + 19 test — the library ships no server of its own)*,
+    26 workflows (12 example + 14 test), health 91.
+  * `psf/requests` — 101 files, 35 code modules (66 excluded), 148 edges, 0 endpoints and 0 workflows
+    — correct for a library, and the UI says so instead of guessing a surface.
+* Language labelling is complete on all three: zero files fall into "Other" (they were 104 files /
+  15,334 LOC on Flask and 20 files on requests before the lookup was made name-aware).
 * Large repositories are bounded by the limits above; truncated graphs and skipped files are
   reported in the UI instead of silently dropping data.

@@ -1,0 +1,206 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 14% 6%;
+    --foreground: 210 20% 96%;
+    --surface: 220 13% 9%;
+    --surface-muted: 220 13% 11%;
+    --surface-raised: 220 12% 13%;
+    --card: 220 13% 9%;
+    --card-foreground: 210 20% 96%;
+    --popover: 220 13% 10%;
+    --popover-foreground: 210 20% 96%;
+    --primary: 190 90% 55%;
+    --primary-foreground: 220 40% 8%;
+    --secondary: 220 12% 16%;
+    --secondary-foreground: 210 20% 92%;
+    --muted: 220 12% 15%;
+    --muted-foreground: 217 12% 62%;
+    --accent: 262 70% 62%;
+    --accent-foreground: 210 20% 98%;
+    --destructive: 0 72% 56%;
+    --destructive-foreground: 210 20% 98%;
+    --border: 220 12% 18%;
+    --input: 220 12% 16%;
+    --ring: 190 90% 55%;
+    --radius: 0.75rem;
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -20%, hsl(190 90% 30% / 0.14), transparent),
+      linear-gradient(to bottom, hsl(220 14% 6%), hsl(220 14% 5.5%));
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.28);
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(220 12% 28%);
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-xl border border-border bg-surface/80 shadow-card backdrop-blur-sm;
+  }
+
+  .panel-header {
+    @apply flex items-center justify-between gap-3 border-b border-border px-5 py-3.5;
+  }
+
+  .panel-title {
+    @apply text-sm font-semibold tracking-tight text-foreground;
+  }
+
+  .mono {
+    @apply font-mono text-[0.8125rem];
+  }
+
+  .path-chip {
+    @apply mono inline-flex items-center gap-1 rounded-md border border-border/80 bg-surface-muted px-2 py-0.5 text-2xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground;
+  }
+
+  .kpi-value {
+    @apply text-2xl font-semibold tracking-tight tabular-nums;
+  }
+
+  .kpi-label {
+    @apply text-2xs font-medium uppercase tracking-wider text-muted-foreground;
+  }
+
+  .grid-lines {
+    background-image: linear-gradient(hsl(var(--border) / 0.35) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--border) / 0.35) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+
+  .markdown-body {
+    @apply text-sm leading-relaxed text-foreground/90;
+  }
+  .markdown-body h1 {
+    @apply mt-6 mb-3 text-xl font-semibold tracking-tight;
+  }
+  .markdown-body h2 {
+    @apply mt-6 mb-2 border-b border-border pb-1.5 text-lg font-semibold tracking-tight;
+  }
+  .markdown-body h3 {
+    @apply mt-5 mb-2 text-base font-semibold;
+  }
+  .markdown-body p {
+    @apply mb-3;
+  }
+  .markdown-body ul,
+  .markdown-body ol {
+    @apply mb-3 ml-5 space-y-1;
+  }
+  .markdown-body ul {
+    @apply list-disc;
+  }
+  .markdown-body ol {
+    @apply list-decimal;
+  }
+  .markdown-body code {
+    @apply mono rounded bg-surface-muted px-1.5 py-0.5 text-[0.78rem] text-primary;
+  }
+  .markdown-body pre {
+    @apply mono mb-4 overflow-x-auto rounded-lg border border-border bg-surface-muted p-3 text-[0.78rem];
+  }
+  .markdown-body pre code {
+    @apply bg-transparent p-0 text-foreground/90;
+  }
+  .markdown-body table {
+    @apply mb-4 w-full border-collapse text-xs;
+  }
+  .markdown-body th,
+  .markdown-body td {
+    @apply border border-border px-2.5 py-1.5 text-left;
+  }
+  .markdown-body a {
+    @apply text-primary underline underline-offset-2;
+  }
+  .markdown-body blockquote {
+    @apply mb-3 border-l-2 border-primary/40 pl-3 text-muted-foreground;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+  .text-balance {
+    text-wrap: balance;
+  }
+  .animate-in-fade {
+    animation: fade-in 0.25s ease-out;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* React Flow theming */
+.react-flow__attribution {
+  display: none;
+}
+.react-flow__node {
+  font-family: var(--font-sans);
+}
+.react-flow__handle {
+  background: hsl(var(--border));
+  border: none;
+  width: 6px;
+  height: 6px;
+}
+.react-flow__edge-path {
+  stroke-width: 1.5;
+}
+.react-flow__controls button {
+  background: hsl(var(--surface-raised));
+  border-bottom: 1px solid hsl(var(--border));
+  color: hsl(var(--foreground));
+}
+.react-flow__controls button:hover {
+  background: hsl(var(--secondary));
+}
+.react-flow__minimap {
+  background: hsl(var(--surface)) !important;
+}

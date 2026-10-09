@@ -1,0 +1,110 @@
+# ---------------------------------------------------------------------------
+# RepoLens - production-style stack
+#
+#   docker compose up --build        # http://localhost:3000
+#
+# Services:
+#   db      Postgres 16 + pgvector (persistent volume, health-checked)
+#   api     FastAPI analysis engine (runs migrations implicitly on boot)
+#   web     Next.js UI, proxies /backend/* to the API internally
+#   migrate one-shot job that applies infrastructure/migrations to the database
+#
+# Every secret is read from the environment (see ../.env.example); nothing is
+# baked into the images.
+# ---------------------------------------------------------------------------
+name: repolens
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-repolens}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-repolens}
+      POSTGRES_DB: ${POSTGRES_DB:-repolens}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - repolens-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-repolens} -d ${POSTGRES_DB:-repolens}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/api.Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-repolens}:${POSTGRES_PASSWORD:-repolens}@db:5432/${POSTGRES_DB:-repolens}
+    command: ["python", "-m", "app.migrations"]
+    restart: "no"
+
+  api:
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/api.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-repolens}:${POSTGRES_PASSWORD:-repolens}@db:5432/${POSTGRES_DB:-repolens}
+      ENABLE_PGVECTOR: ${ENABLE_PGVECTOR:-true}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1536}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-none}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-local}
+      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-text-embedding-3-small}
+      MAX_FILES: ${MAX_FILES:-4000}
+      MAX_FILE_BYTES: ${MAX_FILE_BYTES:-1048576}
+      MAX_REPO_BYTES: ${MAX_REPO_BYTES:-268435456}
+      MAX_ANALYSIS_SECONDS: ${MAX_ANALYSIS_SECONDS:-1800}
+      ANALYSIS_WORKERS: ${ANALYSIS_WORKERS:-2}
+      REPOLENS_DATA_DIR: /data
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+    volumes:
+      - repolens-data:/data
+    ports:
+      - "${API_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+
+  web:
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/web.Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE: /backend
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      # Server-side proxy target for /backend/* (never exposed to the browser).
+      API_INTERNAL_URL: http://api:8000
+      NEXT_PUBLIC_API_BASE: /backend
+      NODE_ENV: production
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+
+volumes:
+  repolens-pgdata:
+  repolens-data:

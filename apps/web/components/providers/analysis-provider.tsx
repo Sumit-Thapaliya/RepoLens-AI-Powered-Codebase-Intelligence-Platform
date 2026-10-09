@@ -1,0 +1,219 @@
+"use client";
+
+import * as React from "react";
+import { ApiError, cancelAnalysis as cancelRun, createAnalysis, deleteAnalysis as deleteRun, getAnalysis, listAnalyses } from "@/lib/api";
+import type { Analysis, RepoMetadata } from "@/lib/types";
+import { useToast } from "@/components/ui/states";
+
+const STORAGE_KEY = "repolens.analysisId";
+
+export interface AnalysisContextValue {
+  analyses: (Analysis & { repo?: { id: string; full_name?: string; url?: string } })[];
+  analysis: Analysis | null;
+  analysisId: string | null;
+  repo: RepoMetadata | null;
+  complete: boolean;
+  loading: boolean;
+  starting: boolean;
+  error: ApiError | null;
+  /** Only set while a run is executing (drives the progress panel). */
+  activeRun: Analysis | null;
+  selectAnalysis: (analysisId: string) => void;
+  startAnalysis: (url: string, branch?: string | null) => Promise<string | null>;
+  cancel: () => Promise<void>;
+  remove: (analysisId: string) => Promise<void>;
+  refreshList: () => Promise<void>;
+}
+
+const AnalysisContext = React.createContext<AnalysisContextValue | null>(null);
+
+export function useAnalysisContext(): AnalysisContextValue {
+  const context = React.useContext(AnalysisContext);
+  if (!context) throw new Error("useAnalysisContext must be used inside <AnalysisProvider>");
+  return context;
+}
+
+export function AnalysisProvider({ children }: { children: React.ReactNode }) {
+  const { push } = useToast();
+  const [analyses, setAnalyses] = React.useState<AnalysisContextValue["analyses"]>([]);
+  const [analysisId, setAnalysisId] = React.useState<string | null>(null);
+  const [analysis, setAnalysis] = React.useState<Analysis | null>(null);
+  const [repo, setRepo] = React.useState<RepoMetadata | null>(null);
+  const [loading, setLoading] = React.useState(true);
+  const [starting, setStarting] = React.useState(false);
+  const [error, setError] = React.useState<ApiError | null>(null);
+
+  const fetchRuns = React.useCallback(async () => {
+    try {
+      const payload = await listAnalyses(25);
+      setAnalyses(payload.analyses);
+      return payload.analyses;
+    } catch (cause) {
+      if (cause instanceof ApiError) setError(cause);
+      return [] as AnalysisContextValue["analyses"];
+    }
+  }, []);
+
+  const refreshList = React.useCallback(async () => {
+    await fetchRuns();
+  }, [fetchRuns]);
+
+  /* Bootstrap: restore the last viewed run or fall back to the newest one. */
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const stored = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
+      const runs = await fetchRuns();
+      if (cancelled) return;
+      const candidate = (stored && runs.find((run) => run.id === stored)) || runs[0];
+      setAnalysisId(candidate ? candidate.id : null);
+      setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchRuns]);
+
+  /* Details for the selected run, polled while it is still executing. */
+  React.useEffect(() => {
+    if (!analysisId) {
+      setAnalysis(null);
+      setRepo(null);
+      return;
+    }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const load = async () => {
+      try {
+        const payload = await getAnalysis(analysisId);
+        if (cancelled) return;
+        setAnalysis(payload.analysis);
+        setRepo(payload.repo ?? null);
+        setError(null);
+        if (payload.analysis.status === "queued" || payload.analysis.status === "running") {
+          timer = setTimeout(load, 1500);
+        } else {
+          void fetchRuns();
+        }
+      } catch (cause) {
+        if (cancelled) return;
+        const apiError = cause instanceof ApiError ? cause : new ApiError(String(cause));
+        setError(apiError);
+        if (apiError.status !== 404) timer = setTimeout(load, 4000);
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [analysisId, fetchRuns]);
+
+  /* Surface terminal state changes once. */
+  const lastStatus = React.useRef<string | null>(null);
+  React.useEffect(() => {
+    if (!analysis) return;
+    if (lastStatus.current && lastStatus.current !== analysis.status) {
+      if (analysis.status === "complete") {
+        push({ tone: "success", title: "Analysis complete", detail: `${analysis.file_count} files parsed for ${repo?.full_name ?? "repository"}.` });
+      } else if (analysis.status === "failed") {
+        push({ tone: "error", title: "Analysis failed", detail: analysis.error?.message ?? "See the run log for details." });
+      }
+    }
+    lastStatus.current = analysis.status;
+  }, [analysis, repo, push]);
+
+  const selectAnalysis = React.useCallback((id: string) => {
+    setAnalysisId(id);
+    setAnalysis(null);
+    if (typeof window !== "undefined") window.localStorage.setItem(STORAGE_KEY, id);
+  }, []);
+
+  const startAnalysis = React.useCallback(
+    async (url: string, branch?: string | null) => {
+      setStarting(true);
+      setError(null);
+      try {
+        const result = await createAnalysis(url, branch ?? null, true);
+        setAnalysisId(result.analysis_id);
+        setAnalysis(result.analysis);
+        setRepo(result.repo);
+        if (typeof window !== "undefined") window.localStorage.setItem(STORAGE_KEY, result.analysis_id);
+        void fetchRuns();
+        push({
+          tone: "info",
+          title: result.reused ? "Re-using running analysis" : "Analysis queued",
+          detail: `${result.repo.full_name} · fetching repository data from GitHub`,
+        });
+        return result.analysis_id;
+      } catch (cause) {
+        const apiError = cause instanceof ApiError ? cause : new ApiError(String(cause));
+        setError(apiError);
+        push({ tone: "error", title: "Could not start analysis", detail: apiError.message });
+        return null;
+      } finally {
+        setStarting(false);
+      }
+    },
+    [push, fetchRuns],
+  );
+
+  const cancel = React.useCallback(async () => {
+    if (!analysisId) return;
+    try {
+      await cancelRun(analysisId);
+      push({ tone: "info", title: "Analysis cancelled" });
+      setAnalysisId(analysisId);
+    } catch (cause) {
+      push({ tone: "error", title: "Cancel failed", detail: cause instanceof Error ? cause.message : String(cause) });
+    }
+  }, [analysisId, push]);
+
+  const remove = React.useCallback(
+    async (id: string) => {
+      try {
+        await deleteRun(id);
+        push({ tone: "success", title: "Analysis deleted" });
+        const runs = await fetchRuns();
+        if (analysisId === id) {
+          const next = runs[0]?.id ?? null;
+          setAnalysisId(next);
+          if (next && typeof window !== "undefined") window.localStorage.setItem(STORAGE_KEY, next);
+        }
+      } catch (cause) {
+        push({ tone: "error", title: "Delete failed", detail: cause instanceof Error ? cause.message : String(cause) });
+      }
+    },
+    [analysisId, push, fetchRuns],
+  );
+
+  const value: AnalysisContextValue = {
+    analyses,
+    analysis,
+    analysisId,
+    repo,
+    complete: analysis?.status === "complete",
+    loading,
+    starting,
+    error,
+    activeRun: analysis && (analysis.status === "queued" || analysis.status === "running") ? analysis : null,
+    selectAnalysis,
+    startAnalysis,
+    cancel,
+    remove,
+    refreshList,
+  };
+
+  return <AnalysisContext.Provider value={value}>{children}</AnalysisContext.Provider>;
+}
+
+export function useAnalysis() {
+  return useAnalysisContext();
+}
+
+/** Convenience: the id of the run a page should query, or null. */
+export function useCurrentAnalysisId(): string | null {
+  const { analysisId, complete } = useAnalysisContext();
+  return complete ? analysisId : null;
+}

@@ -24,6 +24,7 @@ function ApiBody() {
   const [loading, setLoading] = React.useState(true);
   const [method, setMethod] = React.useState("all");
   const [auth, setAuth] = React.useState("all");
+  const [source, setSource] = React.useState("all");
   const [query, setQuery] = React.useState("");
   const [copied, setCopied] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState<string | null>(null);
@@ -52,6 +53,8 @@ function ApiBody() {
       if (method !== "all" && endpoint.method !== method) return false;
       if (auth === "required" && !endpoint.auth_required) return false;
       if (auth === "public" && endpoint.auth_required) return false;
+      if (source === "application" && (endpoint.is_example || endpoint.is_test)) return false;
+      if (source === "examples" && !endpoint.is_example && !endpoint.is_test) return false;
       if (!needle) return true;
       return (
         endpoint.path.toLowerCase().includes(needle) ||
@@ -61,7 +64,7 @@ function ApiBody() {
         endpoint.file_path.toLowerCase().includes(needle)
       );
     });
-  }, [payload, method, auth, query]);
+  }, [payload, method, auth, source, query]);
 
   const methods = React.useMemo(() => {
     const counts = new Map<string, number>();
@@ -85,12 +88,13 @@ function ApiBody() {
     const lines = [
       `# API surface`,
       "",
-      `| Method | Path | Handler | Service | Auth | Source |`,
-      `| --- | --- | --- | --- | --- | --- |`,
-      ...payload.endpoints.map(
-        (endpoint) =>
-          `| ${endpoint.method} | \`${endpoint.path}\` | ${endpoint.handler ?? "—"} | ${endpoint.service ?? "—"} | ${endpoint.auth_required ? "yes" : "no"} | \`${endpoint.file_path}:${endpoint.line ?? 0}\` |`,
-      ),
+      `| Method | Path | Handler | Service | Auth | Origin | Source |`,
+      `| --- | --- | --- | --- | --- | --- | --- |`,
+      ...payload.endpoints.map((endpoint) => {
+        const origin = endpoint.is_example ? "example" : endpoint.is_test ? "test" : "application";
+        const extra = (endpoint.declarations?.length ?? 1) > 1 ? ` (+${(endpoint.declarations?.length ?? 1) - 1} more)` : "";
+        return `| ${endpoint.method} | \`${endpoint.path}\` | ${endpoint.handler ?? "—"} | ${endpoint.service ?? "—"} | ${endpoint.auth_required ? "yes" : "no"} | ${origin} | \`${endpoint.file_path}:${endpoint.line ?? 0}\`${extra} |`;
+      }),
       "",
     ];
     downloadFile(`repolens-api-surface-${analysisId}.md`, lines.join("\n"), "text/markdown");
@@ -174,6 +178,18 @@ function ApiBody() {
             <SelectItem value="public">No auth marker</SelectItem>
           </SelectContent>
         </Select>
+        <Select value={source} onValueChange={setSource}>
+          <SelectTrigger className="w-48">
+            <SelectValue placeholder="Source" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">
+              Source: everything ({(payload.stats.from_examples ?? 0) + (payload.stats.from_tests ?? 0)} from examples/tests)
+            </SelectItem>
+            <SelectItem value="application">Source: application only</SelectItem>
+            <SelectItem value="examples">Source: examples &amp; tests</SelectItem>
+          </SelectContent>
+        </Select>
         <span className="text-2xs text-muted-foreground">
           {endpoints.length} of {payload.endpoints.length} shown
           {payload.frameworks.length ? ` · frameworks: ${payload.frameworks.map((f) => `${f.framework} (${f.count})`).join(", ")}` : ""}
@@ -199,7 +215,9 @@ function ApiBody() {
               {endpoints.length === 0 ? (
                 <tr>
                   <td colSpan={8} className="px-5 py-10 text-center text-muted-foreground">
-                    No endpoint matches the current filters.
+                    {payload.endpoints.length === 0
+                      ? "No HTTP endpoints were found in this repository. That is expected for a library, CLI or data project - the parser only reports route declarations it actually found."
+                      : "No endpoint matches the current filters."}
                   </td>
                 </tr>
               ) : (
@@ -212,9 +230,26 @@ function ApiBody() {
                         </span>
                       </td>
                       <td className="mono px-3 py-2.5">
-                        <button type="button" className="text-left hover:text-primary" onClick={() => setExpanded(endpoint.id)}>
-                          {endpoint.path}
-                        </button>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button type="button" className="text-left hover:text-primary" onClick={() => setExpanded(endpoint.id)}>
+                            {endpoint.path}
+                          </button>
+                          {endpoint.is_example ? (
+                            <Badge variant="outline" className="text-amber-200/90" title="Primary declaration lives in an examples/ folder">
+                              example
+                            </Badge>
+                          ) : null}
+                          {endpoint.is_test ? (
+                            <Badge variant="outline" className="text-sky-200/90" title="Primary declaration lives in a test app">
+                              test
+                            </Badge>
+                          ) : null}
+                          {(endpoint.declarations?.length ?? 1) > 1 ? (
+                            <Badge variant="outline" className="text-muted-foreground" title="The same method and path is declared in several files">
+                              ×{endpoint.declarations?.length}
+                            </Badge>
+                          ) : null}
+                        </div>
                       </td>
                       <td className="px-3 py-2.5">
                         <span className="mono text-muted-foreground">{endpoint.handler ?? "—"}</span>
@@ -272,6 +307,20 @@ function ApiBody() {
                               </p>
                             </div>
                             <div>
+                              <p className="text-2xs uppercase tracking-wider text-muted-foreground">
+                                Declarations {(endpoint.declarations?.length ?? 1) > 1 ? `(${endpoint.declarations?.length})` : ""}
+                              </p>
+                              <ul className="mt-1 space-y-1">
+                                {(endpoint.declarations ?? []).map((declaration) => (
+                                  <li key={`${declaration.path}:${declaration.line ?? 0}`} className="flex items-center gap-1.5">
+                                    <PathLink path={declaration.path} line={declaration.line} compact />
+                                    {declaration.is_example ? <span className="text-2xs text-amber-200/80">example</span> : null}
+                                    {declaration.is_test ? <span className="text-2xs text-sky-200/80">test</span> : null}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                            <div>
                               <p className="text-2xs uppercase tracking-wider text-muted-foreground">Notes</p>
                               <p className="mt-1 text-2xs text-muted-foreground">
                                 {endpoint.notes ??
@@ -289,6 +338,19 @@ function ApiBody() {
           </table>
         </div>
       </section>
+
+      {(payload.stats.from_examples ?? 0) + (payload.stats.from_tests ?? 0) > 0 ? (
+        <InlineNote className="flex items-start gap-2">
+          <Route className="mt-0.5 size-3.5 shrink-0" />
+          <span>
+            {(payload.stats.from_examples ?? 0) + (payload.stats.from_tests ?? 0)} of {payload.stats.total} endpoints are
+            declared in example or test applications rather than shipped code
+            {payload.stats.from_examples ? ` (${payload.stats.from_examples} example` : " (0 example"}
+            {payload.stats.from_tests ? `, ${payload.stats.from_tests} test)` : ", 0 test)"}. That is expected for a library:
+            the repository has no server of its own. Use the source filter to see only application routes.
+          </span>
+        </InlineNote>
+      ) : null}
 
       <InlineNote className="flex items-start gap-2">
         <ShieldQuestion className="mt-0.5 size-3.5 shrink-0" />

@@ -157,7 +157,11 @@ function QualityBody() {
       <div>
         <h1 className="text-base font-semibold tracking-tight">Code quality</h1>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          Static heuristics over {formatNumber(Number(metrics.production_files ?? 0))} production files and{" "}
+          Static heuristics over {formatNumber(Number(metrics.code_files ?? metrics.files ?? 0))} code files
+          {Number(metrics.files ?? 0) > Number(metrics.code_files ?? 0)
+            ? ` (of ${formatNumber(Number(metrics.files))}; documentation, data and assets are excluded)`
+            : ""}
+          , including {formatNumber(Number(metrics.production_files ?? 0))} production and{" "}
           {formatNumber(Number(metrics.test_files ?? 0))} test files. Each finding is traceable to source.
         </p>
       </div>
