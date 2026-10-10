@@ -225,8 +225,16 @@ def list_workflows(session: Session, analysis_id: str, category: str | None = No
                                         func.lower(WorkflowRecord.description).like(needle)))
     rows = session.execute(statement.order_by(WorkflowRecord.confidence.desc()).limit(limit)).scalars().all()
     categories = session.execute(
-        select(WorkflowRecord.category, WorkflowRecord.category_label, func.count())
-        .where(WorkflowRecord.analysis_id == analysis_id).group_by(WorkflowRecord.category, WorkflowRecord.category_label)
+        select(
+            WorkflowRecord.category,
+            func.coalesce(
+                func.min(WorkflowRecord.category_label),
+                WorkflowRecord.category,
+            ),
+            func.count(WorkflowRecord.id),
+        )
+        .where(WorkflowRecord.analysis_id == analysis_id)
+        .group_by(WorkflowRecord.category)
     ).all()
     return {
         "workflows": [_workflow_payload(row) for row in rows],
