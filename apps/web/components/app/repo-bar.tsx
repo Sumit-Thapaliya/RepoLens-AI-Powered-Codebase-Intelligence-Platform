@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import Image from "next/image";
 import {
   BadgeCheck,
   ChevronDown,
@@ -11,7 +12,6 @@ import {
   Loader2,
   Play,
   RefreshCw,
-  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -85,7 +85,13 @@ export function RepoBar() {
     <header className="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur-md">
       <div className="flex flex-wrap items-center gap-3 px-4 py-3 lg:px-6">
         <Link href="/" className="flex items-center gap-2 lg:hidden">
-          <Sparkles className="size-4 text-primary" />
+          <Image
+            src="/repolens-logo.jpg"
+            alt=""
+            width={24}
+            height={24}
+            className="size-6 rounded-md object-cover"
+          />
           <span className="text-sm font-semibold">RepoLens</span>
         </Link>
 

@@ -2,9 +2,9 @@
 
 import * as React from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  Activity,
   Blocks,
   Boxes,
   Database,
@@ -56,9 +56,14 @@ export function Sidebar() {
   return (
     <aside className="sticky top-0 hidden h-svh w-60 shrink-0 flex-col border-r border-border bg-surface/60 backdrop-blur-sm lg:flex">
       <Link href="/" className="flex items-center gap-2.5 px-5 py-4">
-        <span className="relative flex size-8 items-center justify-center rounded-lg border border-primary/30 bg-primary/10">
-          <Activity className="size-4 text-primary" />
-        </span>
+        <Image
+          src="/repolens-logo.jpg"
+          alt=""
+          width={40}
+          height={40}
+          priority
+          className="size-10 shrink-0 rounded-xl border border-primary/30 object-cover shadow-[0_0_16px_rgba(34,211,238,0.16)]"
+        />
         <span className="flex flex-col leading-none">
           <span className="text-sm font-semibold tracking-tight">RepoLens</span>
           <span className="text-2xs text-muted-foreground">codebase intelligence</span>
