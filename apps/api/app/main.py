@@ -44,8 +44,9 @@ async def lifespan(app: FastAPI):
         info = init_db()
         logger.info("Storage ready: %s (dialect=%s)", info.get("storage"), info.get("dialect"))
         capabilities = describe_capabilities()
-        logger.info("Search: %s | GitHub access: anonymous, public repositories only",
-                    capabilities["search"]["ranking"])
+        github_access = "authenticated" if settings.github_token else "anonymous"
+        logger.info("Search: %s | GitHub access: %s, public repositories only",
+                    capabilities["search"]["ranking"], github_access)
     except Exception as exc:
         logger.error("Database initialisation failed: %s", exc)
     sweeper = asyncio.create_task(_sweep_closed_windows())
@@ -62,8 +63,8 @@ def create_app() -> FastAPI:
             "Static codebase intelligence for GitHub repositories: architecture, workflows, dependencies, "
             "APIs, database usage, code quality and ranked search. Analysis artifacts use in-memory SQLite "
             "and disappear when the API stops; temporary source checkouts are removed after each run. "
-            "GitHub access is anonymous, so only public repositories are supported and GitHub's lower "
-            "anonymous API rate limit applies."
+            "Only public repositories are supported. GitHub API access is anonymous by default; an optional "
+            "server-side GITHUB_TOKEN can authenticate public-data requests for a higher rate limit."
         ),
         version="0.1.0",
         lifespan=lifespan,

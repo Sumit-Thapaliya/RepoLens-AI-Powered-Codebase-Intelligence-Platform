@@ -1,11 +1,11 @@
-"""Application settings. The default setup uses anonymous GitHub access and in-memory SQLite."""
+"""Settings for public-only GitHub access and in-memory SQLite storage."""
 
 from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 API_DIR = Path(__file__).resolve().parents[2]
@@ -26,6 +26,10 @@ class Settings(BaseSettings):
         default="http://localhost:3000,http://127.0.0.1:3000",
         alias="CORS_ORIGINS",
     )
+    # Optional server-side credential for authenticated public GitHub API requests.
+    # Private repositories remain unsupported regardless of this setting.
+    github_token: SecretStr | None = Field(default=None, alias="GITHUB_TOKEN", repr=False)
+
     # Limits for anonymous browser sessions and repository downloads.
     max_files: int = Field(default=4000, alias="MAX_FILES")
     max_file_bytes: int = Field(default=1_048_576, alias="MAX_FILE_BYTES")
@@ -45,6 +49,16 @@ class Settings(BaseSettings):
     @classmethod
     def _upper(cls, value: str) -> str:
         return (value or "INFO").upper()
+
+    @field_validator("github_token", mode="before")
+    @classmethod
+    def _clean_github_token(cls, value) -> SecretStr | None:
+        if value is None:
+            return None
+        if isinstance(value, SecretStr):
+            value = value.get_secret_value()
+        token = str(value).strip()
+        return SecretStr(token) if token else None
 
     @field_validator(
         "max_files",
@@ -84,7 +98,10 @@ class Settings(BaseSettings):
         return {
             "storage": {"mode": "memory", "local_files": False},
             "github": {
-                "rate_limit": "60 requests/hour (anonymous)",
+                "rate_limit": (
+                    "up to 5,000 requests/hour (authenticated)"
+                    if self.github_token else "60 requests/hour (anonymous)"
+                ),
             },
             "limits": {
                 "max_files": self.max_files,

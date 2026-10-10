@@ -45,9 +45,7 @@ class GitHubRateLimitError(RepoLensError):
     http_status = 429
 
     def __init__(self, message: str, *, reset_at: str | None = None, hint: str | None = None):
-        super().__init__(message, hint=hint or (
-            "Wait for GitHub's rate-limit reset, then retry. RepoLens uses anonymous public API access."
-        ))
+        super().__init__(message, hint=hint or "Wait for GitHub's rate-limit reset, then retry.")
         self.reset_at = reset_at
 
     def to_dict(self) -> dict:

@@ -27,9 +27,12 @@ def describe_capabilities() -> dict:
             ),
         },
         "github": {
-            "rate_limit": "60 requests/hour (anonymous)",
+            "rate_limit": config["github"]["rate_limit"],
             "private_repositories_allowed": False,
-            "note": "Anonymous access to public GitHub repositories only.",
+            "note": (
+                "Authenticated API access to public GitHub repositories only."
+                if settings.github_token else "Anonymous access to public GitHub repositories only."
+            ),
         },
         "privacy": {
             "source_snippets_stored": settings.store_source_snippets,

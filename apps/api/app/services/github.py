@@ -48,6 +48,11 @@ class GitHubClient:
             "User-Agent": USER_AGENT,
             "X-GitHub-Api-Version": "2022-11-28",
         }
+        token = getattr(settings, "github_token", None)
+        if token:
+            token_value = token.get_secret_value() if hasattr(token, "get_secret_value") else str(token)
+            if token_value.strip():
+                self._headers["Authorization"] = f"Bearer {token_value.strip()}"
 
     # ------------------------------------------------------------- lifecycle
     async def __aenter__(self) -> "GitHubClient":
@@ -81,9 +86,14 @@ class GitHubClient:
                 reset_at = datetime.utcfromtimestamp(int(reset)).isoformat() + "Z"
             raise GitHubRateLimitError("GitHub API rate limit reached.", reset_at=reset_at)
         if status == 401:
+            if getattr(self.settings, "github_token", None):
+                raise GitHostError(
+                    "GitHub rejected the configured API token.",
+                    hint="Check that GITHUB_TOKEN is valid and unexpired. RepoLens still supports public repositories only.",
+                )
             raise GitHostError(
                 "GitHub rejected an anonymous API request.",
-                hint="Retry later. RepoLens uses public GitHub access and does not accept private-repository credentials.",
+                hint="Retry later. RepoLens supports public GitHub repositories only.",
             )
         if status == 404:
             raise RepoNotFoundError(

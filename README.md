@@ -32,7 +32,7 @@ ungraceful restart.
 * **RAM-only SQLite.** Analysis results and browser-session records live in an in-memory SQLite database. They are cleared when the API process stops; there is no persistent database configuration.
 * **Session isolation.** The server issues an opaque `HttpOnly` cookie; only its SHA-256 digest is stored. Analysis leases are bound to that session and a browser tab. Caller-supplied analysis IDs alone do not grant access.
 * **User-inactivity expiry.** A visible tab heartbeats only while pointer, keyboard, touch or wheel input has occurred within the last heartbeat interval. Background polling and an open-but-idle tab never extend the lease. The server expires results after `WINDOW_TTL_SECONDS` (default 30 minutes) from the last heartbeat (normally within 20 seconds of the last input); expired runs disappear from listings immediately and the sweeper removes their rows within one cleanup interval. The client also clears its local analysis and SWR data at expiry.
-* **Public repositories only.** RepoLens accesses GitHub anonymously, so private repositories are not supported. Anonymous GitHub API requests have GitHub's lower rate limit (typically 60 requests per hour); busy usage may need to wait for the limit to reset.
+* **Public repositories only.** RepoLens rejects private repositories. GitHub API access is anonymous by default (typically 60 requests per hour per originating IP). An optional server-side `GITHUB_TOKEN` authenticates public-data requests for a higher limit (typically up to 5,000 requests per hour per user); it does not enable private repositories. Never expose the token in browser code.
 * **Source retention.** Full file contents are not stored with analysis records. By default, search keeps deduplicated identifier terms, not source excerpts; the Code Explorer fetches the requested file from GitHub on demand. Set `STORE_SOURCE_SNIPPETS=true` only if keeping short excerpts in RAM until expiry is acceptable.
 * **No AI.** Analysis, search and impact are deterministic. Nothing is sent to a language model.
 
@@ -50,7 +50,7 @@ git clone <this repo> repolens && cd repolens
 # 1. API
 python -m venv .venv && source .venv/bin/activate
 pip install -e packages/shared -e packages/parser -e packages/graph -e apps/api
-cp .env.example .env                  # optional runtime settings; no token or database URL is needed
+cp .env.example .env                  # optional runtime settings; GITHUB_TOKEN is optional; no database URL is needed
 cd apps/api && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 # 2. Web app (second terminal)
@@ -63,15 +63,15 @@ Paste `https://github.com/fastapi/full-stack-fastapi-template` into the header a
 ## Quick start (Docker)
 
 ```bash
-cp .env.example .env          # optional runtime settings; no GitHub token or database URL is needed
+cp .env.example .env          # optional runtime settings; GITHUB_TOKEN is optional; no database URL is needed
 docker compose up --build     # web on http://localhost:3000, API on http://localhost:8000
 ```
 
 The stack has two services, `api` and `web`. The web server proxies `/backend/*` to the API on the
 internal network, so the browser only talks to one origin. There are no host volumes; source checkouts
 use container-local temporary storage and are removed after each run or on startup. Results live only
-in RAM and disappear when the API stops. RepoLens uses anonymous GitHub access for public repositories
-only; private repositories are unsupported and GitHub's lower anonymous rate limit applies. For an HTTPS
+in RAM and disappear when the API stops. RepoLens supports public repositories only. GitHub access is anonymous by default; optionally set `GITHUB_TOKEN` on
+the API service to authenticate public-data requests and raise the GitHub API rate limit. Private repositories remain unsupported. For an HTTPS
 deployment, set `APP_ENV=production` (to enable Secure session cookies) and set `CORS_ORIGINS` to only
 the origins you operate.
 
@@ -160,14 +160,16 @@ repolens/
 ## Configuration
 
 Runtime settings are set through environment variables. See [`.env.example`](.env.example) for defaults.
-RepoLens does not accept a `GITHUB_TOKEN` or `DATABASE_URL`: repositories must be public, and results
-stay in RAM. Anonymous GitHub API usage is subject to GitHub's lower rate limit (typically 60 requests
-per hour).
+RepoLens does not use a `DATABASE_URL`: results stay in RAM. Repositories must be public. GitHub API access is
+anonymous by default (typically 60 requests/hour per originating IP); optionally configure a server-side
+`GITHUB_TOKEN` to authenticate public-data requests (typically up to 5,000 requests/hour per user). The token
+never belongs in browser code and does not enable private-repository access.
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `APP_ENV` | `development` | Set to `production` to enable Secure session cookies |
 | `LOG_LEVEL` | `INFO` | API log verbosity |
+| `GITHUB_TOKEN` | unset | Optional server-side GitHub PAT for a higher API rate limit; only public repositories are accepted |
 | `CORS_ORIGINS` | localhost:3000 | Allowed browser origins for direct API calls with credentials |
 | `MAX_ANALYSIS_SECONDS` | `1800` | Maximum repository-download time plus cooperative analysis deadline |
 | `MAX_REPO_BYTES` | `104857600` | 100 MiB cap on downloaded and expanded source (`0` disables the cap and allows clone fallback) |
