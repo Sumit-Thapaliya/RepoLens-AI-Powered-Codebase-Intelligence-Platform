@@ -9,7 +9,7 @@ import { RepoBar } from "@/components/app/repo-bar";
 
 export const metadata: Metadata = {
   title: "RepoLens · codebase intelligence",
-  icons: { icon: "/favicon.svg" },
+  icons: { icon: "/repolens-logo.jpg", shortcut: "/repolens-logo.jpg", apple: "/repolens-logo.jpg" },
   description:
     "Analyze GitHub repositories with static architecture, workflow, API, database, dependency, search and impact insights.",
 };
