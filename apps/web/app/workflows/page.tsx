@@ -79,6 +79,20 @@ function WorkflowsBody() {
   }
   if (error && !payload) return <ErrorState error={error} onRetry={() => void load()} className="m-6" />;
   if (!payload) return null;
+  const categoryFilters = new Map<
+  string,
+  { category: string; label: string; count: number }
+  >();
+
+  for (const entry of payload.categories) {
+    const existing = categoryFilters.get(entry.category);
+    categoryFilters.set(
+      entry.category,
+      existing
+        ? { ...existing, count: existing.count + entry.count }
+        : { ...entry },
+    );
+  }
 
   return (
     <div className="space-y-4 p-4 lg:p-6">
@@ -124,7 +138,7 @@ function WorkflowsBody() {
         >
           All ({payload.workflows.length})
         </button>
-        {payload.categories.map((entry) => (
+        {Array.from(categoryFilters.values()).map((entry) => (
           <button
             key={entry.category}
             type="button"
