@@ -12,8 +12,9 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ErrorState, InlineNote, SkeletonCard } from "@/components/ui/states";
-import { ApiError, getDependencies } from "@/lib/api";
-import type { DependenciesPayload, GraphNode } from "@/lib/types";
+import { getDependencies } from "@/lib/api";
+import { useApi } from "@/lib/hooks";
+import type { GraphNode } from "@/lib/types";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
 import { formatNumber, layerLabel } from "@/lib/utils";
 
@@ -23,29 +24,17 @@ function DependenciesBody() {
   const router = useRouter();
   const layerFilter = searchParams.get("layer");
 
-  const [payload, setPayload] = React.useState<DependenciesPayload | null>(null);
-  const [error, setError] = React.useState<ApiError | null>(null);
-  const [loading, setLoading] = React.useState(true);
   const [view, setView] = React.useState<"files" | "modules">("files");
   const [selected, setSelected] = React.useState<GraphNode | null>(null);
   const [searchTerm, setSearchTerm] = React.useState("");
-
+  const limit = view === "files" ? 220 : 120;
+  const { data: payload, error, isLoading: loading, mutate } = useApi(
+    analysisId ? `dependencies:${analysisId}:${view}:${limit}` : null,
+    () => getDependencies(analysisId!, view, limit),
+  );
   const load = React.useCallback(async () => {
-    if (!analysisId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      setPayload(await getDependencies(analysisId, view, view === "files" ? 220 : 120));
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause : new ApiError(String(cause)));
-    } finally {
-      setLoading(false);
-    }
-  }, [analysisId, view]);
-
-  React.useEffect(() => {
-    void load();
-  }, [load]);
+    await mutate();
+  }, [mutate]);
 
   React.useEffect(() => {
     if (!payload || !layerFilter) return;

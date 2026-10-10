@@ -48,6 +48,7 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=error_payload(f"http_{exc.status_code}", str(exc.detail or "Request failed."), None, request_id=request_id),
+            headers=exc.headers,
         )
 
     @app.exception_handler(Exception)

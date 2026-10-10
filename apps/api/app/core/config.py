@@ -28,17 +28,55 @@ class Settings(BaseSettings):
     github_token: str | None = Field(default=None, alias="GITHUB_TOKEN")
     github_api_base: str = Field(default="https://api.github.com", alias="GITHUB_API_BASE")
 
-    # Limits. The time limit is the real guard; size and count caps are optional (0 = none).
+    # Guard rails for work submitted by anonymous browser sessions.
     max_files: int = Field(default=4000, alias="MAX_FILES")
     max_file_bytes: int = Field(default=1_048_576, alias="MAX_FILE_BYTES")
-    max_repo_bytes: int = Field(default=0, alias="MAX_REPO_BYTES")
+    max_repo_bytes: int = Field(default=104_857_600, alias="MAX_REPO_BYTES")
     max_analysis_seconds: int = Field(default=1800, alias="MAX_ANALYSIS_SECONDS")
     analysis_workers: int = Field(default=2, alias="ANALYSIS_WORKERS")
+    max_active_analyses_per_session: int = Field(default=2, alias="MAX_ACTIVE_ANALYSES_PER_SESSION")
+    max_analyses_per_hour: int = Field(default=20, alias="MAX_ANALYSES_PER_HOUR")
+
+    # Inactivity-based retention. Window leases are persisted so Postgres deployments
+    # can still clean up after an API restart.
+    window_ttl_seconds: int = Field(default=1800, alias="WINDOW_TTL_SECONDS")
+    window_sweep_seconds: int = Field(default=30, alias="WINDOW_SWEEP_SECONDS")
+    session_ttl_seconds: int = Field(default=2_592_000, alias="SESSION_TTL_SECONDS")
+
+    # Source excerpts are not persisted by default. Enable only for trusted, private
+    # deployments that explicitly accept retaining short source snippets until expiry.
+    store_source_snippets: bool = Field(default=False, alias="STORE_SOURCE_SNIPPETS")
+    allow_private_repos: bool = Field(default=False, alias="ALLOW_PRIVATE_REPOS")
 
     @field_validator("log_level")
     @classmethod
     def _upper(cls, value: str) -> str:
         return (value or "INFO").upper()
+
+    @field_validator(
+        "max_files", "max_file_bytes", "max_analysis_seconds", "analysis_workers",
+        "max_active_analyses_per_session", "max_analyses_per_hour", "window_ttl_seconds",
+        "session_ttl_seconds",
+    )
+    @classmethod
+    def _positive_limits(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("must be greater than zero")
+        return value
+
+    @field_validator("window_sweep_seconds")
+    @classmethod
+    def _minimum_sweep_interval(cls, value: int) -> int:
+        if value < 5:
+            raise ValueError("must be at least 5 seconds")
+        return value
+
+    @field_validator("max_repo_bytes")
+    @classmethod
+    def _nonnegative_repo_cap(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("must be zero (unlimited) or greater")
+        return value
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -63,8 +101,14 @@ class Settings(BaseSettings):
                 "max_file_bytes": self.max_file_bytes,
                 "max_repo_bytes": self.max_repo_bytes,
                 "max_analysis_seconds": self.max_analysis_seconds,
+                "max_active_analyses_per_session": self.max_active_analyses_per_session,
+                "max_analyses_per_hour": self.max_analyses_per_hour,
                 "analysis_workers": self.analysis_workers,
+                "window_ttl_seconds": self.window_ttl_seconds,
+                "window_sweep_seconds": self.window_sweep_seconds,
             },
+            "source_snippets_stored": self.store_source_snippets,
+            "private_repositories_allowed": self.allow_private_repos,
         }
 
 

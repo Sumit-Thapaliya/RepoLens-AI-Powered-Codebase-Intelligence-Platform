@@ -1,10 +1,8 @@
 """GitHub access: metadata, branches, source download and file content.
 
-Sources are fetched through two independent strategies so a single failure mode
-never blocks an analysis:
-
-1. the REST tarball endpoint (one request, fast, no git binary needed)
-2. ``git clone --depth 1`` (works when tarballs are blocked or very large)
+Sources are fetched from the REST tarball endpoint by default. A shallow ``git clone``
+fallback is available only when ``MAX_REPO_BYTES=0``; with a hard size cap enabled,
+the API fails closed rather than risk an unbounded clone.
 """
 
 from __future__ import annotations
@@ -97,6 +95,11 @@ class GitHubClient:
         response = await self.client.get(f"/repos/{owner}/{name}")
         self._raise_for_status(response, f"{owner}/{name}")
         data = response.json()
+        if data.get("private") and not self.settings.allow_private_repos:
+            raise GitHostError(
+                "Private repositories are disabled for this deployment.",
+                hint="Use a public repository, or enable ALLOW_PRIVATE_REPOS only in a trusted single-tenant deployment.",
+            )
         return _to_metadata(data)
 
     async def resolve(self, url: str) -> tuple[RepoRef, RepoMetadata]:
@@ -155,16 +158,22 @@ class GitHubClient:
 
     # -------------------------------------------------------------- downloads
     async def download_sources(self, owner: str, name: str, ref: str, destination: Path,
-                               max_bytes: int) -> tuple[Path, str]:
+                               max_bytes: int, max_files: int = 4000) -> tuple[Path, str]:
         """Fetch the repository tree. Returns (root_dir, method)."""
         destination.mkdir(parents=True, exist_ok=True)
         try:
-            return await self._download_tarball(owner, name, ref, destination, max_bytes), "tarball"
+            return await self._download_tarball(owner, name, ref, destination, max_bytes, max_files), "tarball"
         except (GitHostError, httpx.HTTPError) as exc:
+            if max_bytes:
+                raise GitHostError(
+                    "The GitHub tarball could not be downloaded within the configured safety limits.",
+                    hint="Retry later or raise MAX_REPO_BYTES. The git-clone fallback is disabled when a hard size cap is active.",
+                ) from exc
             logger.warning("Tarball download failed for %s/%s@%s (%s); falling back to git clone", owner, name, ref, exc)
         return await self._git_clone(owner, name, ref, destination), "git-clone"
 
-    async def _download_tarball(self, owner: str, name: str, ref: str, destination: Path, max_bytes: int) -> Path:
+    async def _download_tarball(self, owner: str, name: str, ref: str, destination: Path,
+                                max_bytes: int, max_files: int) -> Path:
         archive = destination / "source.tar.gz"
         size = 0
         url = f"{self.settings.github_api_base}/repos/{owner}/{name}/tarball/{ref}"
@@ -181,7 +190,7 @@ class GitHubClient:
                             hint="Raise MAX_REPO_BYTES, or set GITHUB_TOKEN for a higher rate limit.",
                         )
                     handle.write(chunk)
-        root = await asyncio.to_thread(_extract_tarball, archive, destination)
+        root = await asyncio.to_thread(_extract_tarball, archive, destination, max_bytes, max_files)
         archive.unlink(missing_ok=True)
         return root
 
@@ -203,8 +212,15 @@ class GitHubClient:
         try:
             _, stderr = await asyncio.wait_for(process.communicate(), timeout=900)
         except asyncio.TimeoutError as exc:
-            process.kill()
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
             raise GitHostError("Cloning the repository timed out after 15 minutes.") from exc
+        except asyncio.CancelledError:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            raise
         if process.returncode != 0:
             message = (stderr or b"").decode("utf-8", "replace")
             message = message.replace(self.settings.github_token or "\0", "***")
@@ -219,20 +235,43 @@ class GitHubClient:
         return target
 
 
-def _extract_tarball(archive: Path, destination: Path) -> Path:
-    """Safely extract a GitHub tarball and return the checkout root."""
+def _extract_tarball(archive: Path, destination: Path, max_bytes: int = 0,
+                     max_files: int = 4000) -> Path:
+    """Safely extract a GitHub tarball, bounding expanded bytes and member count."""
     extract_dir = destination / "extracted"
     if extract_dir.exists():
         shutil.rmtree(extract_dir, ignore_errors=True)
     extract_dir.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive, "r:gz") as tar:
         safe_members = []
+        expanded_bytes = 0
+        file_count = 0
+        entry_count = 0
         for member in tar:
             name = member.name
             if name.startswith("/") or ".." in Path(name).parts:
                 continue
-            if member.issym() or member.islnk():
+            if member.issym() or member.islnk() or not (member.isfile() or member.isdir()):
                 continue
+            entry_count += 1
+            if entry_count > max(1000, max_files * 10):
+                raise RepoTooLargeError(
+                    "The archive contains too many filesystem entries.",
+                    hint="Raise MAX_FILES if the repository legitimately contains more paths.",
+                )
+            if member.isfile():
+                file_count += 1
+                expanded_bytes += max(0, member.size)
+                if max_bytes and expanded_bytes > max_bytes:
+                    raise RepoTooLargeError(
+                        "The expanded repository exceeds MAX_REPO_BYTES.",
+                        hint="Raise MAX_REPO_BYTES only if this repository is trusted and expected to be larger.",
+                    )
+                if file_count > max(100, max_files * 5):
+                    raise RepoTooLargeError(
+                        f"The archive contains more than {max_files * 5} file entries.",
+                        hint="Raise MAX_FILES if the repository legitimately contains more source files.",
+                    )
             safe_members.append(member)
         tar.extractall(extract_dir, members=safe_members, filter="data")
     roots = [entry for entry in extract_dir.iterdir() if entry.is_dir()]

@@ -8,10 +8,10 @@ import { NavigationProvider, PageFrame } from "@/components/providers/navigation
 import { RepoBar } from "@/components/app/repo-bar";
 
 export const metadata: Metadata = {
-  title: "RepoLens · AI codebase intelligence",
+  title: "RepoLens · codebase intelligence",
   icons: { icon: "/favicon.svg" },
   description:
-    "Analyse any public GitHub repository: architecture, workflows, APIs, database models, dependencies and grounded AI answers.",
+    "Analyze GitHub repositories with static architecture, workflow, API, database, dependency, search and impact insights.",
 };
 
 export const viewport: Viewport = {
@@ -36,8 +36,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                       <PageFrame>{children}</PageFrame>
                     </main>
                     <footer className="border-t border-border px-4 py-3 text-2xs text-muted-foreground lg:px-6">
-                      RepoLens analyses public GitHub repositories. Every number shown is derived from parsed source —
-                      heuristics are labelled, and AI answers cite the files they came from.
+                      RepoLens statically analyzes GitHub repositories. Every number comes from parsed source;
+                      heuristic findings are labelled, and nothing is sent to a language model.
                     </footer>
                   </div>
                 </div>

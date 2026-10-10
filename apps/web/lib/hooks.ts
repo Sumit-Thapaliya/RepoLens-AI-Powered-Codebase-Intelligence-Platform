@@ -8,14 +8,18 @@ import { ApiError } from "./api";
  * Thin SWR wrapper with the project defaults: no polling unless asked for,
  * request deduplication, retry only on transport errors (not 4xx).
  */
-export function useApi<T>(key: string | null | ((id: string) => string), fetcher: () => Promise<T>, options: { refreshInterval?: number; revalidateOnFocus?: boolean } = {}): SWRResponse<T, ApiError> {
-  const resolvedKey = typeof key === "function" ? key("") : key;
-  return useSWR<T, ApiError>(resolvedKey, fetcher, {
+export function useApi<T>(
+  key: string | null,
+  fetcher: () => Promise<T>,
+  options: { refreshInterval?: number; revalidateOnFocus?: boolean; keepPreviousData?: boolean } = {},
+): SWRResponse<T, ApiError> {
+  return useSWR<T, ApiError>(key, fetcher, {
     revalidateOnFocus: options.revalidateOnFocus ?? false,
     refreshInterval: options.refreshInterval,
     shouldRetryOnError: (error) => error instanceof ApiError && error.status >= 500,
     errorRetryCount: 2,
-    keepPreviousData: true,
+    // Never flash another analysis's cached payload when the active id changes.
+    keepPreviousData: options.keepPreviousData ?? false,
   });
 }
 

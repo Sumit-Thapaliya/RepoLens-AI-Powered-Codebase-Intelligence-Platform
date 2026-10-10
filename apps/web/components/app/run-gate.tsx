@@ -63,7 +63,7 @@ function StageList({ stages }: { stages: StageProgress[] }) {
  * explains exactly what is happening (idle, running, failed, cancelled).
  */
 export function RunGate({ children, title = "Select or start an analysis" }: { children: React.ReactNode; title?: string }) {
-  const { analysis, activeRun, error, complete, loading, startAnalysis, starting } = useAnalysisContext();
+  const { analysis, activeRun, error, expired, complete, loading, startAnalysis, starting } = useAnalysisContext();
   const [url, setUrl] = React.useState("");
 
   if (loading && !analysis) {
@@ -83,7 +83,9 @@ export function RunGate({ children, title = "Select or start an analysis" }: { c
       <EmptyState
         icon={Terminal}
         title={title}
-        detail="Paste a public GitHub repository URL in the bar above and press “Analyze Repository”. RepoLens fetches the source via the GitHub API, parses every file with tree-sitter, and persists the resulting graph before showing anything here."
+        detail={expired
+          ? "Your previous analysis expired after inactivity or the API restarted. The temporary results are no longer available; paste the repository URL again to create a fresh analysis."
+          : "Paste a GitHub repository URL you can access in the bar above and press “Analyze Repository”. RepoLens fetches the source via the GitHub API, parses it statically, and stores temporary analysis results for this session."}
         className="min-h-[50vh]"
         action={
           <form

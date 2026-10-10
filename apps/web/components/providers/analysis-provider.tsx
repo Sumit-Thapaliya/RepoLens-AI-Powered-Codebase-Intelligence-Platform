@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useSWRConfig } from "swr";
 import {
   ApiError,
   cancelAnalysis as cancelRun,
@@ -31,6 +32,8 @@ export interface AnalysisContextValue {
   loading: boolean;
   starting: boolean;
   error: ApiError | null;
+  /** True when a previously selected run disappeared after expiry or an API restart. */
+  expired: boolean;
   /** Only set while a run is executing (drives the progress panel). */
   activeRun: Analysis | null;
   selectAnalysis: (analysisId: string) => void;
@@ -50,6 +53,14 @@ export function useAnalysisContext(): AnalysisContextValue {
 
 export function AnalysisProvider({ children }: { children: React.ReactNode }) {
   const { push } = useToast();
+  const { mutate: mutateSWR } = useSWRConfig();
+  const clearSWRAnalysisCache = React.useCallback((id: string) => {
+    void mutateSWR(
+      (key) => typeof key === "string" && key.includes(id),
+      undefined,
+      { revalidate: false },
+    );
+  }, [mutateSWR]);
   const [analyses, setAnalyses] = React.useState<RunSummary[]>([]);
   const [analysisId, setAnalysisId] = React.useState<string | null>(null);
   const [analysis, setAnalysis] = React.useState<Analysis | null>(null);
@@ -57,6 +68,7 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = React.useState(true);
   const [starting, setStarting] = React.useState(false);
   const [error, setError] = React.useState<ApiError | null>(null);
+  const [expired, setExpired] = React.useState(false);
 
   /** Sets the shown analysis and remembers it for this window only. */
   const commitCurrent = React.useCallback((id: string | null) => {
@@ -76,14 +88,21 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
       const found = payload.analyses;
       const foundIds = new Set(found.map((run) => run.id));
       const kept = ids.filter((id) => foundIds.has(id));
-      if (kept.length !== ids.length) writeWindowRuns(kept);
+      const expiredIds = ids.filter((id) => !foundIds.has(id));
+      const hadExpiredRun = expiredIds.length > 0;
+      if (hadExpiredRun) {
+        writeWindowRuns(kept);
+        clearResponseCache();
+        expiredIds.forEach(clearSWRAnalysisCache);
+      }
+      setExpired(hadExpiredRun);
       setAnalyses(found);
       return found;
     } catch (cause) {
       if (cause instanceof ApiError) setError(cause);
       return [];
     }
-  }, []);
+  }, [clearSWRAnalysisCache]);
 
   const refreshList = React.useCallback(async () => {
     await fetchRuns();
@@ -129,8 +148,10 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
       );
       const gone = results.filter((result) => result.gone).map((result) => result.id);
       if (gone.length === 0 || cancelled) return;
+      setExpired(true);
       writeWindowRuns(readWindowRuns().filter((id) => !gone.includes(id)));
       clearResponseCache();
+      gone.forEach(clearSWRAnalysisCache);
       const runs = await fetchRuns();
       setAnalysisId((current) => {
         if (!current || !gone.includes(current)) return current;
@@ -145,7 +166,7 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [fetchRuns]);
+  }, [fetchRuns, clearSWRAnalysisCache]);
 
   /* Details for the selected run, polled while it is still executing. */
   React.useEffect(() => {
@@ -211,11 +232,13 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
     async (url: string, branch?: string | null) => {
       setStarting(true);
       setError(null);
+      setExpired(false);
       const windowId = getWindowId();
       const previous = readWindowRuns();
       try {
         const result = await createAnalysis(url, branch ?? null, true, windowId);
         clearResponseCache();
+        previous.filter((id) => id !== result.analysis_id).forEach(clearSWRAnalysisCache);
         writeWindowRuns([result.analysis_id]);
         commitCurrent(result.analysis_id);
         setAnalysis(result.analysis);
@@ -242,7 +265,7 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
         setStarting(false);
       }
     },
-    [push, fetchRuns, commitCurrent],
+    [push, fetchRuns, commitCurrent, clearSWRAnalysisCache],
   );
 
   const cancel = React.useCallback(async () => {
@@ -261,6 +284,7 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
         // Release it from this window; the server deletes it unless another open window still uses it.
         await releaseAnalysis(id, getWindowId());
         clearResponseCache();
+        clearSWRAnalysisCache(id);
         writeWindowRuns(readWindowRuns().filter((item) => item !== id));
         push({ tone: "success", title: "Analysis removed" });
         const runs = await fetchRuns();
@@ -269,7 +293,7 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
         push({ tone: "error", title: "Delete failed", detail: cause instanceof Error ? cause.message : String(cause) });
       }
     },
-    [analysisId, push, fetchRuns, commitCurrent],
+    [analysisId, push, fetchRuns, commitCurrent, clearSWRAnalysisCache],
   );
 
   const value: AnalysisContextValue = {
@@ -281,6 +305,7 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
     loading,
     starting,
     error,
+    expired,
     activeRun: analysis && (analysis.status === "queued" || analysis.status === "running") ? analysis : null,
     selectAnalysis,
     startAnalysis,

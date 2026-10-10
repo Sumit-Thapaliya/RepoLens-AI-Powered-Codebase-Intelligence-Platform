@@ -10,8 +10,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ErrorState, InlineNote, SkeletonCard, useToast } from "@/components/ui/states";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/menus";
-import { ApiError, getApis } from "@/lib/api";
-import type { Endpoint, EndpointPayload } from "@/lib/types";
+import { getApis } from "@/lib/api";
+import { useApi } from "@/lib/hooks";
+import type { Endpoint } from "@/lib/types";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
 import { cn, formatNumber, methodColor } from "@/lib/utils";
 import { downloadFile } from "@/lib/download";
@@ -19,32 +20,19 @@ import { downloadFile } from "@/lib/download";
 function ApiBody() {
   const { analysisId } = useAnalysisContext();
   const { push } = useToast();
-  const [payload, setPayload] = React.useState<EndpointPayload | null>(null);
-  const [error, setError] = React.useState<ApiError | null>(null);
-  const [loading, setLoading] = React.useState(true);
   const [method, setMethod] = React.useState("all");
   const [auth, setAuth] = React.useState("all");
   const [source, setSource] = React.useState("all");
   const [query, setQuery] = React.useState("");
   const [copied, setCopied] = React.useState<string | null>(null);
   const [expanded, setExpanded] = React.useState<string | null>(null);
-
+  const { data: payload, error, isLoading: loading, mutate } = useApi(
+    analysisId ? `apis:${analysisId}` : null,
+    () => getApis(analysisId!),
+  );
   const load = React.useCallback(async () => {
-    if (!analysisId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      setPayload(await getApis(analysisId));
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause : new ApiError(String(cause)));
-    } finally {
-      setLoading(false);
-    }
-  }, [analysisId]);
-
-  React.useEffect(() => {
-    void load();
-  }, [load]);
+    await mutate();
+  }, [mutate]);
 
   const endpoints = React.useMemo(() => {
     if (!payload) return [];

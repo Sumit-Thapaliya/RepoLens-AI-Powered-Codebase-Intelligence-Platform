@@ -1,7 +1,7 @@
 /**
- * Per-window state. sessionStorage belongs to one browser tab/window, so every window gets its own
- * id and its own list of analyses. Nothing here is shared with other windows, and nothing survives
- * closing the window. A page reload keeps the same data, because sessionStorage survives reloads.
+ * Per-tab convenience state. sessionStorage gives each tab its own id and remembered analysis list.
+ * These client-side ids are not credentials: the server-issued HttpOnly session cookie and persisted
+ * tab lease authorize every analysis request. Nothing here survives closing the tab.
  */
 
 const WINDOW_ID_KEY = "repolens.windowId";
@@ -34,7 +34,7 @@ export function getWindowId(): string {
   return id;
 }
 
-/** Analysis ids this window owns. */
+/** Locally remembered run ids; the API rechecks each id against the authenticated tab lease. */
 export function readWindowRuns(): string[] {
   const store = storage();
   if (!store) return [];

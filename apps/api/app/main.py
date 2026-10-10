@@ -10,21 +10,22 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api import routes_analysis, routes_insights, routes_repos, routes_system
+from .analyzers.pipeline import cleanup_orphaned_workdirs
 from .core.capabilities import describe_capabilities
 from .core.config import get_settings
 from .core.db import init_db
 from .core.errors import install_error_handlers
 from .core.logging import configure_logging
 from .services.analysis import get_manager
-from .services.windows import SWEEP_INTERVAL_SECONDS
 
 logger = logging.getLogger(__name__)
 
 
 async def _sweep_closed_windows() -> None:
-    """Discard runs whose browser windows have closed (no heartbeat for WINDOW_TTL_SECONDS)."""
+    """Discard runs whose browser windows have closed or whose session expired."""
+    sweep_seconds = max(5, get_settings().window_sweep_seconds)
     while True:
-        await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
+        await asyncio.sleep(sweep_seconds)
         try:
             removed = get_manager().sweep_windows()
             if removed:
@@ -39,8 +40,12 @@ async def lifespan(app: FastAPI):
     configure_logging(settings.log_level)
     logger.info("Starting %s (env=%s)", settings.app_name, settings.app_env)
     try:
+        cleanup_orphaned_workdirs()
         info = init_db()
         logger.info("Storage ready: %s (dialect=%s)", info.get("storage"), info.get("dialect"))
+        interrupted = get_manager().recover_interrupted_runs()
+        if interrupted:
+            logger.warning("Marked %s interrupted analysis run(s) after API restart", len(interrupted))
         capabilities = describe_capabilities()
         logger.info("Search: %s | GitHub authenticated: %s", capabilities["search"]["ranking"],
                     capabilities["github"]["authenticated"])
@@ -57,8 +62,9 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="RepoLens API",
         description=(
-            "Codebase intelligence for public GitHub repositories: architecture, workflows, dependencies, "
-            "APIs, database usage, code quality and ranked code search. Results are never saved to disk."
+            "Static codebase intelligence for GitHub repositories: architecture, workflows, dependencies, "
+            "APIs, database usage, code quality and ranked search. Analysis artifacts use in-memory SQLite "
+            "unless DATABASE_URL is configured; temporary source checkouts are removed after each run."
         ),
         version="0.1.0",
         lifespan=lifespan,
@@ -69,13 +75,24 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origin_list or ["*"],
-        allow_credentials=False,
+        allow_origins=settings.cors_origin_list,
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=["*"],
     )
     install_error_handlers(app)
+
+    @app.middleware("http")
+    async def _disable_private_api_caching(request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-store, private"
+            response.headers["Pragma"] = "no-cache"
+            vary = {item.strip() for item in response.headers.get("Vary", "").split(",") if item.strip()}
+            vary.update({"Cookie", "X-Window-Id", "Origin"})
+            response.headers["Vary"] = ", ".join(sorted(vary, key=str.lower))
+        return response
 
     app.include_router(routes_system.router, prefix="/api")
     app.include_router(routes_repos.router, prefix="/api")

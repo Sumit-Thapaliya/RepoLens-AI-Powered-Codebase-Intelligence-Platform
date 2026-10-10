@@ -51,24 +51,57 @@ type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown; query?: Reco
  * window. Switching pages then shows the data at once. The cache is emptied whenever the window
  * lets go of an analysis, and it lives only in this window's memory (nothing is written to disk).
  */
-const RESPONSE_CACHE_LIMIT = 150;
-const responseCache = new Map<string, unknown>();
+const RESPONSE_CACHE_MAX_ENTRIES = 100;
+const RESPONSE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+const RESPONSE_CACHE_MAX_ENTRY_BYTES = 8 * 1024 * 1024;
+type ResponseCacheEntry = { value: unknown; size: number };
+const responseCache = new Map<string, ResponseCacheEntry>();
 const inFlight = new Map<string, Promise<unknown>>();
+let responseCacheBytes = 0;
 let cacheGeneration = 0;
 
 export function clearResponseCache(): void {
   cacheGeneration += 1;
   responseCache.clear();
+  responseCacheBytes = 0;
   inFlight.clear();
+}
+
+let sessionPromise: Promise<void> | null = null;
+
+/** Bootstrap the server-issued HttpOnly session before making protected requests. */
+async function ensureApiSession(): Promise<void> {
+  if (typeof window === "undefined") return;
+  if (!sessionPromise) {
+    sessionPromise = fetch(`${API_BASE}/session`, {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+    }).then(async (response) => {
+      if (!response.ok) {
+        throw new ApiError("Could not establish a RepoLens session.", {
+          code: "session_error",
+          status: response.status,
+          hint: "Refresh the page and try again.",
+        });
+      }
+      const result = (await response.json()) as { new_session?: boolean };
+      if (result.new_session) clearResponseCache();
+    }).catch((error) => {
+      sessionPromise = null;
+      throw error;
+    });
+  }
+  await sessionPromise;
 }
 
 function cachedGet<T>(path: string, options: { query?: Record<string, string | number | boolean | undefined | null> } = {}): Promise<T> {
   const key = `${path}?${JSON.stringify(options.query ?? {})}`;
-  if (responseCache.has(key)) {
-    const value = responseCache.get(key) as T;
+  const cached = responseCache.get(key);
+  if (cached) {
     responseCache.delete(key);
-    responseCache.set(key, value);
-    return Promise.resolve(value);
+    responseCache.set(key, cached);
+    return Promise.resolve(cached.value as T);
   }
   const pending = inFlight.get(key);
   if (pending) return pending as Promise<T>;
@@ -78,10 +111,18 @@ function cachedGet<T>(path: string, options: { query?: Record<string, string | n
     (value) => {
       if (generation === cacheGeneration) {
         inFlight.delete(key);
-        responseCache.set(key, value);
-        if (responseCache.size > RESPONSE_CACHE_LIMIT) {
-          const oldest = responseCache.keys().next().value;
-          if (oldest !== undefined) responseCache.delete(oldest);
+        const serialized = JSON.stringify(value);
+        const size = serialized ? serialized.length * 2 : 0;
+        if (size <= RESPONSE_CACHE_MAX_ENTRY_BYTES) {
+          responseCache.set(key, { value, size });
+          responseCacheBytes += size;
+          while (responseCache.size > RESPONSE_CACHE_MAX_ENTRIES || responseCacheBytes > RESPONSE_CACHE_MAX_BYTES) {
+            const oldest = responseCache.keys().next().value;
+            if (oldest === undefined) break;
+            const removed = responseCache.get(oldest);
+            responseCache.delete(oldest);
+            responseCacheBytes -= removed?.size ?? 0;
+          }
         }
       }
       return value;
@@ -96,6 +137,7 @@ function cachedGet<T>(path: string, options: { query?: Record<string, string | n
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  await ensureApiSession();
   const { body, query, headers, ...rest } = options;
   let url = `${API_BASE}${path}`;
   if (query) {
@@ -107,19 +149,30 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     if (qs) url += `?${qs}`;
   }
 
+  const send = () => fetch(url, {
+    ...rest,
+    headers: {
+      "X-Window-Id": getWindowId(),
+      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(headers || {}),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+    credentials: "include",
+    cache: "no-store",
+  });
+
   let response: Response;
   try {
-    response = await fetch(url, {
-      ...rest,
-      headers: {
-        "X-Window-Id": getWindowId(),
-        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-        ...(headers || {}),
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      cache: "no-store",
-    });
+    response = await send();
+    if (response.status === 401 && typeof window !== "undefined") {
+      // The API may have restarted in RAM-only mode. Establish a fresh session and
+      // retry once; the old analysis will then receive a normal ownership/expiry 404.
+      sessionPromise = null;
+      await ensureApiSession();
+      response = await send();
+    }
   } catch (cause) {
+    if (cause instanceof ApiError) throw cause;
     throw new ApiError("Cannot reach the RepoLens API.", {
       code: "network_error",
       hint: "The API service may be down. Check that the backend is running and reachable.",

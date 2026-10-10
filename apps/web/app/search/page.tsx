@@ -109,8 +109,8 @@ function SearchBody() {
         <div>
           <h1 className="text-base font-semibold tracking-tight">Search</h1>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Find code in this analysis by name, keyword or exact text. Results are ranked by how well they match your
-            words in the file path, symbol names and code.
+            Find files and symbols by path, name or identifier. Source files are not retained in the search index;
+            open a result to fetch its source from GitHub at the analysed commit.
           </p>
         </div>
         <Badge variant="outline" className="font-normal">
@@ -131,7 +131,7 @@ function SearchBody() {
             ref={inputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder={mode === "ranked" ? "Keywords, e.g. password hash" : "Exact text, e.g. get_user_by_email"}
+            placeholder={mode === "ranked" ? "Identifiers, e.g. password_hash" : "Identifier words, e.g. get_user_by_email"}
             className="h-10 pl-9 pr-9"
           />
           <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-border px-1.5 text-2xs text-muted-foreground">
@@ -144,7 +144,7 @@ function SearchBody() {
               <SearchIcon className="size-3" /> Ranked
             </TabsTrigger>
             <TabsTrigger value="text" className="h-8">
-              <Type className="size-3" /> Exact text
+              <Type className="size-3" /> Identifiers
             </TabsTrigger>
           </TabsList>
         </Tabs>
@@ -228,13 +228,13 @@ function SearchBody() {
             <EmptyState
               icon={FileSearch}
               title="No match"
-              detail="Try fewer or different keywords, or switch to Exact text to search a string verbatim."
+              detail="Try fewer or different identifiers, or switch to the identifier search for exact symbol words."
             />
           ) : (
             <EmptyState
               icon={SearchIcon}
               title="Ranked search"
-              detail="Type keywords from the code you are looking for. Results point at the matching file, symbol and line."
+              detail="Type identifiers or file-path terms. Results point to matching files and symbols without storing source excerpts."
             />
           )}
         </TabsContent>
@@ -268,10 +268,10 @@ function SearchBody() {
             <EmptyState
               icon={Type}
               title={`No occurrence of “${query}”`}
-              detail="Exact text search runs over the indexed file contents of this analysis."
+              detail="This privacy-safe index matches all identifier terms in a file or symbol; it is not a byte-for-byte search of source lines."
             />
           ) : (
-            <EmptyState icon={Type} title="Exact text search" detail="Search for an identifier, route path or config key verbatim." />
+            <EmptyState icon={Type} title="Identifier search" detail="Search for an identifier, route path or config key. Source text is fetched only when you open a result." />
           )}
         </TabsContent>
       </Tabs>

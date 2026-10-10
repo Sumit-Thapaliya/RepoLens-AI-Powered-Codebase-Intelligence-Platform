@@ -1,10 +1,10 @@
 """Database engine, session management and schema creation.
 
-Storage policy: RepoLens never writes analysis data to the local disk.
+Persisted analysis records use this policy:
 
 * ``DATABASE_URL`` set to a PostgreSQL URL (for example Neon) - results are stored there.
-* ``DATABASE_URL`` empty - results live in an in-memory SQLite database. Nothing is written to
-  a file, and everything is released when the process stops.
+* ``DATABASE_URL`` empty - results live in an in-memory SQLite database and disappear when
+  the process stops. Source checkouts are temporary files, removed after a run or on startup.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from sqlalchemy.pool import QueuePool
 
 from repolens_shared.errors import DatabaseError
 
-from ..models.tables import Base
+from ..models.tables import Base, ChunkRecord, FileRecord
 from .config import Settings, get_settings
 
 logger = logging.getLogger(__name__)
@@ -116,11 +116,28 @@ def get_db() -> Iterator[Session]:
 
 
 def init_db() -> dict:
-    """Create the schema (idempotent). Safe to call on every start."""
+    """Create the schema (idempotent), then apply the default source-retention policy."""
     engine = get_engine()
     Base.metadata.create_all(engine)
     _state["schema_ready"] = True
+    _scrub_legacy_source_text()
     return dict(_state)
+
+
+def _scrub_legacy_source_text() -> None:
+    """Remove full files and legacy search excerpts when snippets are not explicitly enabled."""
+    if get_settings().store_source_snippets:
+        return
+    try:
+        with session_scope() as session:
+            session.query(FileRecord).update({FileRecord.content: None}, synchronize_session=False)
+            legacy_chunks = session.query(ChunkRecord).filter(
+                ~ChunkRecord.text.startswith("__INDEX__ ")
+            ).yield_per(500)
+            for row in legacy_chunks:
+                row.text = "__INDEX__ " + row.path + " " + (row.symbol or "")
+    except Exception:
+        logger.warning("Could not scrub legacy source excerpts", exc_info=True)
 
 
 def database_state() -> dict:

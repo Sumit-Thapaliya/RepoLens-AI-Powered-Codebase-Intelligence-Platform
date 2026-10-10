@@ -12,6 +12,7 @@ import asyncio
 import contextvars
 import logging
 import posixpath
+import re
 import shutil
 import tempfile
 import threading
@@ -89,8 +90,13 @@ MAX_SYMBOLS = 40_000
 MAX_CHUNKS = 12_000
 # Temporary checkouts live under the OS temp dir and are deleted when a run ends.
 WORK_ROOT = Path(tempfile.gettempdir()) / "repolens-work"
-MAX_DB_CONTENT_BYTES = 96_000
 GRAPH_NODE_BUDGET = 1_600
+
+
+def cleanup_orphaned_workdirs() -> None:
+    """Remove checkouts left behind by an ungraceful process/container restart."""
+    shutil.rmtree(WORK_ROOT, ignore_errors=True)
+    WORK_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 class AnalysisCancelled(Exception):
@@ -306,10 +312,33 @@ class AnalysisPipeline:
         if workdir.exists():
             shutil.rmtree(workdir, ignore_errors=True)
         workdir.mkdir(parents=True, exist_ok=True)
-        async with GitHubClient(self.settings) as client:
-            root, method = await client.download_sources(
-                context.owner, context.name, context.branch, workdir, self.settings.max_repo_bytes,
-            )
+        download_task = None
+        try:
+            async with GitHubClient(self.settings) as client:
+                download_task = asyncio.create_task(client.download_sources(
+                    context.owner,
+                    context.name,
+                    context.branch,
+                    workdir,
+                    self.settings.max_repo_bytes,
+                    self.settings.max_files,
+                ))
+                while not download_task.done():
+                    self._check_cancel()
+                    limit = self.settings.max_analysis_seconds
+                    remaining = limit - (time.perf_counter() - self.started) if limit else 1.0
+                    if limit and remaining <= 0:
+                        raise RepoLensError(
+                            f"Analysis stopped after the {limit}-second time limit.",
+                            hint="Raise MAX_ANALYSIS_SECONDS only if this repository is trusted and expected to take longer.",
+                        )
+                    await asyncio.wait({download_task}, timeout=min(0.25, remaining) if limit else 0.25)
+                root, method = download_task.result()
+                self._check_cancel()
+        finally:
+            if download_task is not None and not download_task.done():
+                download_task.cancel()
+                await asyncio.gather(download_task, return_exceptions=True)
         context.root = root
         set_source_root(str(root))
         with session_scope() as session:
@@ -459,7 +488,11 @@ class AnalysisPipeline:
         self._set_stage(Stage.INDEXING, detail="Building the code search index", status="running")
         self._check_cancel()
         chunks = _build_chunks(context, max_chunks=MAX_CHUNKS, scope=self.analysis_id)
-        _store_chunks(self.analysis_id, chunks)
+        _store_chunks(
+            self.analysis_id,
+            chunks,
+            store_source_snippets=self.settings.store_source_snippets,
+        )
         with session_scope() as session:
             analysis = session.get(Analysis, self.analysis_id)
             if analysis:
@@ -582,7 +615,8 @@ class AnalysisPipeline:
                 file_id = stable_id("file", self.analysis_id, parsed.path)
                 is_test = is_test_path(parsed.path)
                 content = context.files.get(parsed.path) or ""
-                store_content = content if len(content.encode("utf-8")) <= MAX_DB_CONTENT_BYTES else None
+                # Full source files are never persisted with analysis artifacts. The code
+                # explorer fetches them from GitHub on demand after the temporary checkout is removed.
                 file_rows.append(FileRecord(
                     id=file_id, analysis_id=self.analysis_id, path=parsed.path, language=parsed.language,
                     size_bytes=parsed.size, loc=parsed.loc, parsed=parsed.parse_error is None,
@@ -591,7 +625,7 @@ class AnalysisPipeline:
                     layer=layer_for_path(parsed.path, is_test), is_test=is_test,
                     is_entrypoint=is_entrypoint(parsed.path, parsed.language),
                     content_hash=sha1(content[:200_000]), summary=_file_summary(parsed),
-                    content=store_content,
+                    content=None,
                 ))
                 for symbol in parsed.symbols:
                     if symbol_budget <= 0:
@@ -743,6 +777,26 @@ def _dedupe(rows: list) -> list:
     return out
 
 
+def _parsed_identifier_terms(parsed) -> list[str]:
+    """Extract structured code identifiers without retaining comments or literals."""
+    terms: list[str] = []
+    for symbol in parsed.symbols:
+        terms.extend([symbol.name, symbol.kind, symbol.parent or "", *symbol.params])
+        for call in symbol.calls:
+            terms.extend([call.name, call.qualifier or "", call.full or ""])
+    for item in parsed.imports:
+        terms.extend([item.module, *item.names])
+    terms.extend(parsed.exports)
+    for route in parsed.routes:
+        terms.extend([route.handler or "", route.request_model or "", route.response_model or ""])
+    for model in parsed.models:
+        terms.append(model.name)
+        terms.extend(field.get("name", "") for field in model.fields if isinstance(field, dict))
+    for query in parsed.queries:
+        terms.extend([query.orm or "", query.kind])
+    return list(dict.fromkeys(term.strip() for term in terms if isinstance(term, str) and term.strip()))
+
+
 def _build_chunks(context: PipelineContext, max_chunks: int, scope: str = "") -> list[dict]:
     """Symbol-level, file-level and doc-level chunks with real line ranges."""
     chunks: list[dict] = []
@@ -766,7 +820,7 @@ def _build_chunks(context: PipelineContext, max_chunks: int, scope: str = "") ->
             line_start = content[:index].count("\n") + 1
             chunks.append({"id": stable_id("chunk-doc", scope, path, index), "path": path, "symbol": None, "kind": "doc",
                            "start_line": line_start, "end_line": line_start + text.count("\n"),
-                           "text": f"{path}\n{text}"[:6000],
+                           "text": f"{path}\n{text}"[:6000], "identifiers": [],
                            "tokens": max(1, len(text) // 4), "priority": 0})
             if len(chunks) >= max_chunks:
                 return chunks[:max_chunks]
@@ -775,6 +829,7 @@ def _build_chunks(context: PipelineContext, max_chunks: int, scope: str = "") ->
         if parsed.parse_error:
             continue
         file_lines = lines_for(parsed.path)
+        identifiers = _parsed_identifier_terms(parsed)
         for symbol in parsed.symbols:
             if symbol.kind not in {"function", "method", "class", "component"}:
                 continue
@@ -790,7 +845,7 @@ def _build_chunks(context: PipelineContext, max_chunks: int, scope: str = "") ->
                 + f"code:\n{body}"
             )
             chunks.append({"id": stable_id("chunk-symbol", scope, parsed.path, symbol.name, symbol.start_line),
-                           "path": parsed.path, "symbol": symbol.name, "kind": "symbol",
+                           "path": parsed.path, "symbol": symbol.name, "kind": "symbol", "identifiers": identifiers,
                            "start_line": symbol.start_line, "end_line": symbol.end_line,
                            "text": text[:6000], "tokens": max(1, len(text) // 4), "priority": 1})
             if len(chunks) >= max_chunks:
@@ -802,7 +857,7 @@ def _build_chunks(context: PipelineContext, max_chunks: int, scope: str = "") ->
             if len(header.strip()) > 60:
                 chunks.append({
                     "id": stable_id("chunk-file", scope, parsed.path), "path": parsed.path, "symbol": None, "kind": "file",
-                    "start_line": 1, "end_line": max(1, header.count("\n")),
+                    "start_line": 1, "end_line": max(1, header.count("\n")), "identifiers": identifiers,
                     "text": f"file: {parsed.path}\nlanguage: {parsed.language}\ncontent:\n{header}"[:6000],
                     "tokens": max(1, len(header) // 4), "priority": 2,
                 })
@@ -811,15 +866,42 @@ def _build_chunks(context: PipelineContext, max_chunks: int, scope: str = "") ->
     return chunks[:max_chunks]
 
 
-def _store_chunks(analysis_id: str, chunks: list[dict]) -> None:
-    """Persist the lexical search chunks for one analysis (text only, no vectors)."""
-    with session_scope() as session:
-        session.query(ChunkRecord).filter(ChunkRecord.analysis_id == analysis_id).delete(synchronize_session=False)
-        rows = [ChunkRecord(
+def _store_chunks(analysis_id: str, chunks: list[dict], *, store_source_snippets: bool = False) -> None:
+    """Persist a bounded search index, not full source excerpts by default."""
+    token_re = re.compile(r"[A-Za-z_][A-Za-z0-9_]{2,}|\d+")
+    rows = []
+    for chunk in chunks:
+        if store_source_snippets:
+            indexed_text = chunk["text"]
+        else:
+            # Retain structured code identifiers and paths only. The index deliberately
+            # excludes comments, docstrings, string literals, syntax and line text.
+            terms = []
+            seen = set()
+            source_terms = [chunk["path"], chunk.get("symbol") or "", *chunk.get("identifiers", [])]
+            for source_term in source_terms:
+                spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", source_term)
+                candidates = [source_term, *token_re.findall(spaced.replace("_", " ").replace(".", " "))]
+                for term in candidates:
+                    if not term:
+                        continue
+                    folded = term.casefold()
+                    if folded not in seen:
+                        seen.add(folded)
+                        terms.append(term)
+                    if len(terms) >= 800:
+                        break
+                if len(terms) >= 800:
+                    break
+            indexed_text = "__INDEX__ " + " ".join(terms)
+        rows.append(ChunkRecord(
             id=chunk["id"], analysis_id=analysis_id, path=chunk["path"], symbol=chunk.get("symbol"),
             kind=chunk["kind"], start_line=chunk["start_line"], end_line=chunk["end_line"],
-            text=chunk["text"], tokens=chunk["tokens"],
-        ) for chunk in chunks]
+            text=indexed_text, tokens=chunk["tokens"],
+        ))
+
+    with session_scope() as session:
+        session.query(ChunkRecord).filter(ChunkRecord.analysis_id == analysis_id).delete(synchronize_session=False)
         for start_index in range(0, len(rows), 1000):
             session.bulk_save_objects(rows[start_index: start_index + 1000])
             session.flush()

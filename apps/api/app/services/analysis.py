@@ -14,6 +14,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -23,10 +24,10 @@ from repolens_shared.utils import stable_id
 from ..analyzers.pipeline import AnalysisPipeline
 from ..core.config import Settings, get_settings
 from ..core.db import session_scope
-from ..models.tables import Analysis, Repo
+from ..models.tables import Analysis, AnalysisWindow, Repo
 from .github import GitHubClient
 from .store import delete_analysis_rows, find_repo_by_full_name, repo_payload
-from .windows import get_windows
+from .windows import expire_windows
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +55,13 @@ class AnalysisManager:
         return list(self._history.values())[-limit:][::-1]
 
     # ----------------------------------------------------------------- create
-    async def create_run(self, url: str, branch: str | None = None, force: bool = False) -> dict:
-        """Resolve the repository, persist metadata and enqueue an analysis."""
+    async def create_run(self, url: str, branch: str | None = None, force: bool = False,
+                         owner_session_id: str | None = None) -> dict:
+        """Resolve the repository, persist metadata and enqueue an analysis.
+
+        An active run is reusable only by the same authenticated session; two users
+        never join the same analysis just because they requested the same repository.
+        """
         async with GitHubClient(self.settings) as client:
             ref, metadata = await client.resolve(url)
             branches = await client.get_branches(ref.owner, ref.name)
@@ -76,9 +82,17 @@ class AnalysisManager:
             _apply_metadata(repo, metadata)
             session.flush()
 
-            if not force:
+            if not force and owner_session_id:
                 existing = session.execute(
-                    select(Analysis).where(Analysis.repo_id == repo.id, Analysis.status.in_(["queued", "running"]))
+                    select(Analysis)
+                    .join(AnalysisWindow, AnalysisWindow.analysis_id == Analysis.id)
+                    .where(
+                        Analysis.repo_id == repo.id,
+                        Analysis.branch == selected,
+                        AnalysisWindow.session_id == owner_session_id,
+                        Analysis.status.in_(["queued", "running"]),
+                    )
+                    .order_by(Analysis.created_at.desc())
                 ).scalars().first()
                 if existing is not None:
                     return {"analysis_id": existing.id, "repo_id": repo.id, "status": existing.status,
@@ -96,14 +110,51 @@ class AnalysisManager:
         return {"analysis_id": analysis_id, "repo_id": repo_id, "status": "queued", "reused": False,
                 "repo": repo_snapshot, "branches": [item.model_dump() for item in branches]}
 
-    async def reanalyse(self, repo_id: str, branch: str | None = None, force: bool = True) -> dict:
+    async def reanalyse(self, repo_id: str, branch: str | None = None, force: bool = True,
+                        owner_session_id: str | None = None) -> dict:
         with session_scope() as session:
             repo = session.get(Repo, repo_id)
             if repo is None:
                 raise RepoLensError(f"Repository `{repo_id}` is not imported yet.",
                                     hint="Import it first with POST /api/repos/resolve.")
             url = repo.url
-        return await self.create_run(url, branch=branch, force=force)
+        return await self.create_run(url, branch=branch, force=force, owner_session_id=owner_session_id)
+
+    def recover_interrupted_runs(self) -> list[str]:
+        """Mark queued/running database rows as interrupted after a process restart.
+
+        The worker queue is process-local, so an in-flight job cannot resume safely
+        after restart. Its checkout is removed at startup and the UI can start a fresh run.
+        """
+        now = datetime.now(timezone.utc)
+        recovered: list[str] = []
+        with session_scope() as session:
+            rows = session.execute(
+                select(Analysis).where(Analysis.status.in_(["queued", "running"]))
+            ).scalars().all()
+            for analysis in rows:
+                analysis.status = "failed"
+                analysis.message = "Analysis was interrupted when the API process restarted."
+                analysis.error = {
+                    "code": "interrupted",
+                    "message": analysis.message,
+                    "hint": "Start a new analysis. The abandoned temporary checkout was removed during startup.",
+                }
+                analysis.finished_at = now
+                if analysis.created_at:
+                    started = analysis.created_at
+                    if started.tzinfo is None:
+                        started = started.replace(tzinfo=timezone.utc)
+                    analysis.duration_ms = max(0, int((now - started).total_seconds() * 1000))
+                stages = [dict(stage) for stage in (analysis.stages or []) if isinstance(stage, dict)]
+                for stage in stages:
+                    if stage.get("status") in {"queued", "running"}:
+                        stage["status"] = "failed"
+                        stage["detail"] = "API process restarted before this stage completed."
+                        stage["finished_at"] = now.isoformat()
+                analysis.stages = stages
+                recovered.append(analysis.id)
+        return recovered
 
     # --------------------------------------------------------------- schedule
     def _schedule(self, analysis_id: str) -> None:
@@ -151,13 +202,18 @@ class AnalysisManager:
         with session_scope() as session:
             delete_analysis_rows(session, analysis_id)
         self._history.pop(analysis_id, None)
-        get_windows().forget(analysis_id)
         return True
 
     def sweep_windows(self) -> list[str]:
-        """Discard every run whose windows have all closed. Returns the ids that were removed."""
+        """Discard runs with no live owner and sessions whose persisted leases expired."""
+        with session_scope() as session:
+            expired_ids = expire_windows(
+                session,
+                ttl_seconds=self.settings.window_ttl_seconds,
+                session_ttl_seconds=self.settings.session_ttl_seconds,
+            )
         removed = []
-        for analysis_id in get_windows().expired():
+        for analysis_id in expired_ids:
             try:
                 if self.discard(analysis_id):
                     removed.append(analysis_id)

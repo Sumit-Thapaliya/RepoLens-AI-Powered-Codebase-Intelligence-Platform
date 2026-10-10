@@ -2,12 +2,10 @@
 
 import * as React from "react";
 import { usePathname } from "next/navigation";
-import { PageLoading } from "@/components/app/page-loading";
 
 /**
- * Makes sidebar navigation feel instant. On click, the target is recorded here at once:
- * the sidebar highlights it and the page area shows a loading view. The real page
- * replaces the loading view when the route has loaded (when the pathname changes).
+ * Keeps the current page visible while Next.js completes navigation. Cached page
+ * data then renders immediately, with only a thin progress indicator during routing.
  */
 
 /* If a route never loads, give up after this long and show the old page again. */
@@ -53,8 +51,17 @@ export function useNavigation(): NavigationContextValue {
   return React.useContext(NavigationContext);
 }
 
-/** Shows the loading view while a navigation is pending; otherwise the page. */
+/** Keeps the page mounted and shows a thin route progress indicator while navigation is pending. */
 export function PageFrame({ children }: { children: React.ReactNode }) {
   const { pendingHref } = useNavigation();
-  return pendingHref ? <PageLoading /> : <>{children}</>;
+  return (
+    <>
+      {pendingHref ? (
+        <div aria-hidden="true" className="fixed inset-x-0 top-0 z-[100] h-0.5 overflow-hidden bg-primary/10">
+          <div className="h-full w-1/3 animate-pulse bg-primary" />
+        </div>
+      ) : null}
+      {children}
+    </>
+  );
 }

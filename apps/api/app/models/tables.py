@@ -90,6 +90,38 @@ class Analysis(Base):
     repo: Mapped[Repo] = relationship(back_populates="analyses")
 
 
+class BrowserSession(Base):
+    """Digest of an opaque HttpOnly browser-session cookie."""
+
+    __tablename__ = "browser_sessions"
+    __table_args__ = (Index("ix_browser_sessions_expires", "expires_at"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    last_seen_at: Mapped[float] = mapped_column(Float, nullable=False)
+    expires_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
+class AnalysisWindow(Base):
+    """An authenticated tab that is allowed to access and retain one analysis."""
+
+    __tablename__ = "analysis_windows"
+    __table_args__ = (
+        Index("ix_analysis_windows_session", "session_id", "window_id"),
+        Index("ix_analysis_windows_heartbeat", "analysis_id", "last_seen_at"),
+    )
+
+    analysis_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("analyses.id", ondelete="CASCADE"), primary_key=True
+    )
+    session_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("browser_sessions.id", ondelete="CASCADE"), primary_key=True
+    )
+    window_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False)
+    last_seen_at: Mapped[float] = mapped_column(Float, nullable=False)
+
+
 class FileRecord(Base):
     __tablename__ = "files"
     __table_args__ = (UniqueConstraint("analysis_id", "path", name="uq_file_path"), Index("ix_files_analysis", "analysis_id"))

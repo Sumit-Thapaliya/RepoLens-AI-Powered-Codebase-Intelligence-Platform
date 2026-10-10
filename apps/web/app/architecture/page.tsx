@@ -7,33 +7,20 @@ import { ArchitectureFlow, ArchitectureLegend } from "@/components/architecture/
 import { PathLink } from "@/components/common/path-link";
 import { ErrorState, InlineNote, SectionHeading, SkeletonCard } from "@/components/ui/states";
 import { Badge } from "@/components/ui/badge";
-import { ApiError, getArchitecture } from "@/lib/api";
-import type { ArchitectureGraph } from "@/lib/types";
+import { getArchitecture } from "@/lib/api";
+import { useApi } from "@/lib/hooks";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
 import { cn, formatNumber, layerColor } from "@/lib/utils";
 
 function ArchitectureBody() {
   const { analysisId } = useAnalysisContext();
-  const [graph, setGraph] = React.useState<ArchitectureGraph | null>(null);
-  const [error, setError] = React.useState<ApiError | null>(null);
-  const [loading, setLoading] = React.useState(true);
-
+  const { data: graph, error, isLoading: loading, mutate } = useApi(
+    analysisId ? `architecture:${analysisId}` : null,
+    () => getArchitecture(analysisId!),
+  );
   const load = React.useCallback(async () => {
-    if (!analysisId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      setGraph(await getArchitecture(analysisId));
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause : new ApiError(String(cause)));
-    } finally {
-      setLoading(false);
-    }
-  }, [analysisId]);
-
-  React.useEffect(() => {
-    void load();
-  }, [load]);
+    await mutate();
+  }, [mutate]);
 
   if (loading && !graph) return <SkeletonCard className="m-6" lines={10} />;
   if (error && !graph) return <ErrorState error={error} onRetry={() => void load()} className="m-6" />;

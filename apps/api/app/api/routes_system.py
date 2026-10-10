@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request, Response
 
 from repolens_parser import available_languages
 from repolens_shared.constants import LANGUAGE_LABELS, TEXT_INDEXED_LANGUAGES, TREE_SITTER_LANGUAGES
@@ -10,10 +10,17 @@ from repolens_shared.constants import LANGUAGE_LABELS, TEXT_INDEXED_LANGUAGES, T
 from ..core.capabilities import describe_capabilities
 from ..core.config import get_settings
 from ..core.db import database_state
+from ..services.sessions import establish_session
 from .deps import DbSession
 from sqlalchemy import text
 
 router = APIRouter(tags=["system"])
+
+
+@router.post("/session")
+def create_or_refresh_session(request: Request, response: Response, session: DbSession) -> dict:
+    """Issue or refresh the HttpOnly browser session cookie used by protected routes."""
+    return establish_session(request, response, session, get_settings())
 
 
 @router.get("/health")

@@ -23,8 +23,8 @@ import { RecentAnalyses } from "@/components/runs/recent-analyses";
 import { ArchitectureFlow, ArchitectureLegend } from "@/components/architecture/architecture-graph";
 import { ErrorState, SectionHeading, SkeletonCard } from "@/components/ui/states";
 import { Button } from "@/components/ui/button";
-import { ApiError, getArchitecture, getOverview } from "@/lib/api";
-import type { ArchitectureGraph, Overview } from "@/lib/types";
+import { getArchitecture, getOverview } from "@/lib/api";
+import { useApi } from "@/lib/hooks";
 import { formatNumber } from "@/lib/utils";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
 
@@ -34,32 +34,22 @@ function Section({ children, className = "" }: { children: React.ReactNode; clas
 
 function OverviewBody() {
   const { analysisId, analysis } = useAnalysisContext();
-  const [overview, setOverview] = React.useState<Overview | null>(null);
-  const [architecture, setArchitecture] = React.useState<ArchitectureGraph | null>(null);
-  const [error, setError] = React.useState<ApiError | null>(null);
-  const [loading, setLoading] = React.useState(true);
-
-  const load = React.useCallback(async () => {
-    if (!analysisId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const [overviewPayload, architecturePayload] = await Promise.all([
-        getOverview(analysisId),
-        getArchitecture(analysisId),
+  const { data, error, isLoading, mutate } = useApi(
+    analysisId ? `overview:${analysisId}` : null,
+    async () => {
+      const [overview, architecture] = await Promise.all([
+        getOverview(analysisId!),
+        getArchitecture(analysisId!),
       ]);
-      setOverview(overviewPayload);
-      setArchitecture(architecturePayload);
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause : new ApiError(String(cause)));
-    } finally {
-      setLoading(false);
-    }
-  }, [analysisId]);
-
-  React.useEffect(() => {
-    void load();
-  }, [load]);
+      return { overview, architecture };
+    },
+  );
+  const overview = data?.overview ?? null;
+  const architecture = data?.architecture ?? null;
+  const loading = isLoading;
+  const load = React.useCallback(async () => {
+    await mutate();
+  }, [mutate]);
 
   if (loading && !overview) {
     return (

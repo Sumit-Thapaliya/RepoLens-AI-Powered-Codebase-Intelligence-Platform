@@ -11,8 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState, ErrorState, InlineNote, SkeletonCard } from "@/components/ui/states";
-import { ApiError, getDatabase } from "@/lib/api";
-import type { DatabasePayload } from "@/lib/types";
+import { getDatabase } from "@/lib/api";
+import { useApi } from "@/lib/hooks";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
 import { cn, formatNumber } from "@/lib/utils";
 
@@ -27,31 +27,23 @@ const QUERY_TONE: Record<string, string> = {
 
 function DatabaseBody() {
   const { analysisId } = useAnalysisContext();
-  const [payload, setPayload] = React.useState<DatabasePayload | null>(null);
-  const [error, setError] = React.useState<ApiError | null>(null);
-  const [loading, setLoading] = React.useState(true);
   const [selectedModel, setSelectedModel] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState("");
   const [queryKind, setQueryKind] = React.useState<string | null>(null);
-
+  const { data: payload, error, isLoading: loading, mutate } = useApi(
+    analysisId ? `database:${analysisId}` : null,
+    () => getDatabase(analysisId!),
+  );
   const load = React.useCallback(async () => {
-    if (!analysisId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await getDatabase(analysisId);
-      setPayload(data);
-      setSelectedModel(data.models[0]?.id ?? null);
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause : new ApiError(String(cause)));
-    } finally {
-      setLoading(false);
-    }
-  }, [analysisId]);
+    await mutate();
+  }, [mutate]);
 
   React.useEffect(() => {
-    void load();
-  }, [load]);
+    if (!payload) return;
+    setSelectedModel((current) =>
+      payload.models.some((model) => model.id === current) ? current : payload.models[0]?.id ?? null,
+    );
+  }, [payload]);
 
   const model = payload?.models.find((entry) => entry.id === selectedModel) ?? payload?.models[0] ?? null;
   const modelQueries = React.useMemo(

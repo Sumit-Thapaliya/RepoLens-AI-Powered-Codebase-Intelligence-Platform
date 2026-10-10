@@ -70,21 +70,37 @@ def _hit(chunk_id: str, path: str, symbol: str | None, kind: str, start_line: in
 
 
 def _snippet(body: str, limit: int = 420) -> str:
-    """Strip the synthetic header lines added when indexing chunks."""
+    """Return a source excerpt only when explicitly enabled; otherwise explain the privacy-safe index."""
+    if (body or "").startswith("__INDEX__ "):
+        return "Source text is not retained. Open this result to fetch the file from GitHub."
     lines = [line for line in (body or "").splitlines() if not line.startswith(_SYNTHETIC_PREFIXES)]
     cleaned = "\n".join(lines).strip() or (body or "")
     return truncate(cleaned, limit)
 
 
 def search_text(session: Session, analysis_id: str, pattern: str, limit: int = 60) -> list[dict]:
-    """Plain substring search across indexed chunk text (used by the explorer)."""
-    needle = f"%{pattern.lower()}%"
+    """Search exact stored snippets when enabled, otherwise match all query identifiers."""
+    query_terms = {token.casefold() for token in _TOKEN_RE.findall(pattern or "")}
+    if not query_terms:
+        return []
     rows = session.execute(
-        select(ChunkRecord).where(ChunkRecord.analysis_id == analysis_id,
-                                  ChunkRecord.text.ilike(needle)).limit(limit)
+        select(ChunkRecord).where(ChunkRecord.analysis_id == analysis_id).limit(SCAN_LIMIT)
     ).scalars().all()
-    return [{"path": row.path, "symbol": row.symbol, "kind": row.kind, "start_line": row.start_line,
-             "end_line": row.end_line, "snippet": _snippet(row.text, 260)} for row in rows]
+    matches = []
+    needle = (pattern or "").casefold()
+    for row in rows:
+        if row.text.startswith("__INDEX__ "):
+            terms = {token.casefold() for token in _TOKEN_RE.findall(row.text)}
+            matched = query_terms.issubset(terms)
+        else:
+            matched = needle in row.text.casefold()
+        if matched:
+            matches.append({"path": row.path, "symbol": row.symbol, "kind": row.kind,
+                            "start_line": row.start_line, "end_line": row.end_line,
+                            "snippet": _snippet(row.text, 260)})
+            if len(matches) >= min(max(limit, 1), 500):
+                break
+    return matches
 
 
 def dedupe_by_path(hits: Iterable[dict], max_per_path: int = 2) -> list[dict]:

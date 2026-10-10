@@ -11,8 +11,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState, ErrorState, InlineNote, SkeletonCard } from "@/components/ui/states";
-import { ApiError, getWorkflows } from "@/lib/api";
-import type { Workflow, WorkflowsPayload } from "@/lib/types";
+import { getWorkflows } from "@/lib/api";
+import { useApi } from "@/lib/hooks";
+import type { Workflow } from "@/lib/types";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
 import { cn, truncate } from "@/lib/utils";
 
@@ -27,33 +28,27 @@ const CATEGORY_TONE: Record<string, string> = {
 
 function WorkflowsBody() {
   const { analysisId } = useAnalysisContext();
-  const [payload, setPayload] = React.useState<WorkflowsPayload | null>(null);
-  const [error, setError] = React.useState<ApiError | null>(null);
-  const [loading, setLoading] = React.useState(true);
   const [category, setCategory] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState("");
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [view, setView] = React.useState("steps");
   const router = useRouter();
-
+  const { data: payload, error, isLoading: loading, mutate } = useApi(
+    analysisId ? `workflows:${analysisId}:80` : null,
+    () => getWorkflows(analysisId!, undefined, 80),
+  );
   const load = React.useCallback(async () => {
-    if (!analysisId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await getWorkflows(analysisId, undefined, 80);
-      setPayload(data);
-      setSelectedId((current) => current ?? data.workflows[0]?.id ?? null);
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause : new ApiError(String(cause)));
-    } finally {
-      setLoading(false);
-    }
-  }, [analysisId]);
+    await mutate();
+  }, [mutate]);
 
   React.useEffect(() => {
-    void load();
-  }, [load]);
+    if (!payload) return;
+    setSelectedId((current) =>
+      payload.workflows.some((workflow) => workflow.id === current)
+        ? current
+        : payload.workflows[0]?.id ?? null,
+    );
+  }, [payload]);
 
   const filtered = React.useMemo(() => {
     if (!payload) return [];
