@@ -1,7 +1,7 @@
 /**
  * Per-tab convenience state. sessionStorage gives each tab its own id and remembered analysis list.
- * These client-side ids are not credentials: the server-issued HttpOnly session cookie and persisted
- * tab lease authorize every analysis request. Nothing here survives closing the tab.
+ * These client-side ids are not credentials: the server-issued HttpOnly session cookie and the
+ * server-held tab lease authorize every analysis request. Nothing here survives closing the tab.
  */
 
 const WINDOW_ID_KEY = "repolens.windowId";

@@ -10,9 +10,10 @@ import { DonutChart } from "@/components/charts/donut-chart";
 import { BarList } from "@/components/charts/bar-list";
 import { Input } from "@/components/ui/input";
 import { ErrorState, InlineNote, SkeletonCard } from "@/components/ui/states";
-import { ApiError, getQuality } from "@/lib/api";
-import type { QualityIssue, QualityPayload } from "@/lib/types";
+import { getQuality } from "@/lib/api";
+import type { QualityIssue } from "@/lib/types";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
+import { useApi } from "@/lib/hooks";
 import { cn, formatNumber, severityColor } from "@/lib/utils";
 
 const KIND_LABELS: Record<string, string> = {
@@ -104,29 +105,17 @@ function IssueRow({ issue }: { issue: QualityIssue }) {
 
 function QualityBody() {
   const { analysisId } = useAnalysisContext();
-  const [payload, setPayload] = React.useState<QualityPayload | null>(null);
-  const [error, setError] = React.useState<ApiError | null>(null);
-  const [loading, setLoading] = React.useState(true);
+  const { data: payload, error, isLoading: loading, mutate } = useApi(
+    analysisId ? `quality:${analysisId}` : null,
+    () => getQuality(analysisId!),
+  );
   const [kind, setKind] = React.useState<string | null>(null);
   const [severity, setSeverity] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState("");
 
   const load = React.useCallback(async () => {
-    if (!analysisId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      setPayload(await getQuality(analysisId));
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause : new ApiError(String(cause)));
-    } finally {
-      setLoading(false);
-    }
-  }, [analysisId]);
-
-  React.useEffect(() => {
-    void load();
-  }, [load]);
+    await mutate();
+  }, [mutate]);
 
   const issues = React.useMemo(() => {
     if (!payload) return [];

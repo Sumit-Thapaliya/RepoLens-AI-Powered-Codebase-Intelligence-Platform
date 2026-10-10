@@ -26,6 +26,7 @@ import { EmptyState, ErrorState, SkeletonCard, useToast } from "@/components/ui/
 import { ApiError, getFile, getFileTree, getSymbolReferences, getSymbols } from "@/lib/api";
 import type { FileNode, FilePayload, SymbolInfo } from "@/lib/types";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
+import { useApi } from "@/lib/hooks";
 import { cn } from "@/lib/utils";
 
 function SymbolJump({
@@ -188,10 +189,13 @@ function ExplorerBody() {
 
   const pathParam = searchParams.get("path");
   const lineParam = Number(searchParams.get("line") ?? 0) || null;
+  const { data: treePayload, error: treeError } = useApi(
+    analysisId ? `file-tree:${analysisId}` : null,
+    () => getFileTree(analysisId!),
+  );
+  const root = treePayload?.root ?? null;
+  const total = treePayload?.total ?? 0;
 
-  const [root, setRoot] = React.useState<FileNode | null>(null);
-  const [total, setTotal] = React.useState(0);
-  const [treeError, setTreeError] = React.useState<ApiError | null>(null);
   const [file, setFile] = React.useState<FilePayload | null>(null);
   const [fileError, setFileError] = React.useState<ApiError | null>(null);
   const [loadingFile, setLoadingFile] = React.useState(false);
@@ -223,29 +227,14 @@ function ExplorerBody() {
     [analysisId, router],
   );
 
-  /* Load the file tree once per analysis and open the first file (or the one in the URL). */
+  /* Open the requested or first source file once the SWR-cached tree is ready. */
   const bootstrapped = React.useRef<string | null>(null);
   React.useEffect(() => {
-    if (!analysisId || bootstrapped.current === analysisId) return;
+    if (!analysisId || !treePayload || bootstrapped.current === analysisId) return;
     bootstrapped.current = analysisId;
-    let cancelled = false;
-    (async () => {
-      try {
-        const payload = await getFileTree(analysisId);
-        if (cancelled) return;
-        setRoot(payload.root);
-        setTotal(payload.total);
-        const target = pathParam || pickDefaultFile(payload.root);
-        if (target) void openFile(target, lineParam);
-      } catch (cause) {
-        if (!cancelled) setTreeError(cause instanceof ApiError ? cause : new ApiError(String(cause)));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analysisId, pathParam, lineParam, openFile]);
+    const target = pathParam || pickDefaultFile(treePayload.root);
+    if (target) void openFile(target, lineParam);
+  }, [analysisId, treePayload, pathParam, lineParam, openFile]);
 
   /* Follow in-app navigation (e.g. from the dependency graph or the impact view). */
   React.useEffect(() => {

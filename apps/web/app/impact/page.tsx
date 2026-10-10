@@ -13,6 +13,7 @@ import { EmptyState, ErrorState, InlineNote, SkeletonCard, useToast } from "@/co
 import { ApiError, getFileTree, getImpact } from "@/lib/api";
 import type { FileNode, ImpactFile, ImpactReport } from "@/lib/types";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
+import { useApi } from "@/lib/hooks";
 import { cn, formatNumber, layerLabel, severityColor } from "@/lib/utils";
 
 function flatten(node: FileNode, out: string[] = []): string[] {
@@ -106,20 +107,17 @@ function ImpactBody() {
   const router = useRouter();
   const { push } = useToast();
 
-  const [paths, setPaths] = React.useState<string[]>([]);
+  const { data: fileTree } = useApi(
+    analysisId ? `file-tree:${analysisId}` : null,
+    () => getFileTree(analysisId!),
+  );
+  const paths = React.useMemo(() => fileTree ? flatten(fileTree.root).sort() : [], [fileTree]);
   const [path, setPath] = React.useState(searchParams.get("path") ?? "");
   const [symbol, setSymbol] = React.useState(searchParams.get("symbol") ?? "");
   const [depth, setDepth] = React.useState(3);
   const [report, setReport] = React.useState<ImpactReport | null>(null);
   const [error, setError] = React.useState<ApiError | null>(null);
   const [loading, setLoading] = React.useState(false);
-
-  React.useEffect(() => {
-    if (!analysisId) return;
-    getFileTree(analysisId)
-      .then((payload) => setPaths(flatten(payload.root).sort()))
-      .catch(() => setPaths([]));
-  }, [analysisId]);
 
   const run = React.useCallback(
     async (targetPath: string, targetSymbol?: string | null) => {

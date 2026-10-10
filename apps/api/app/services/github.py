@@ -23,7 +23,6 @@ import httpx
 
 from repolens_shared.errors import (
     GitHostError,
-    GitHubAuthError,
     GitHubRateLimitError,
     RepoNotFoundError,
     RepoTooLargeError,
@@ -35,6 +34,7 @@ from ..core.config import Settings
 
 logger = logging.getLogger(__name__)
 
+GITHUB_API_BASE = "https://api.github.com"
 USER_AGENT = "RepoLens/0.1 (+https://github.com/repolens)"
 
 
@@ -43,16 +43,16 @@ class GitHubClient:
         self.settings = settings
         self._client = client
         self._owns_client = client is None
-        headers = {"Accept": "application/vnd.github+json", "User-Agent": USER_AGENT,
-                   "X-GitHub-Api-Version": "2022-11-28"}
-        if settings.github_token:
-            headers["Authorization"] = f"Bearer {settings.github_token}"
-        self._headers = headers
+        self._headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": USER_AGENT,
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
 
     # ------------------------------------------------------------- lifecycle
     async def __aenter__(self) -> "GitHubClient":
         if self._client is None:
-            self._client = httpx.AsyncClient(base_url=self.settings.github_api_base, headers=self._headers,
+            self._client = httpx.AsyncClient(base_url=GITHUB_API_BASE, headers=self._headers,
                                              timeout=httpx.Timeout(30.0, read=180.0), follow_redirects=True)
         return self
 
@@ -81,11 +81,15 @@ class GitHubClient:
                 reset_at = datetime.utcfromtimestamp(int(reset)).isoformat() + "Z"
             raise GitHubRateLimitError("GitHub API rate limit reached.", reset_at=reset_at)
         if status == 401:
-            raise GitHubAuthError("GitHub rejected the configured token.",
-                                  hint="GITHUB_TOKEN is invalid or expired - update it in your .env file.")
+            raise GitHostError(
+                "GitHub rejected an anonymous API request.",
+                hint="Retry later. RepoLens uses public GitHub access and does not accept private-repository credentials.",
+            )
         if status == 404:
-            raise RepoNotFoundError(f"GitHub returned 404 for {context}.",
-                                    hint="Check the repository URL; private repositories require GITHUB_TOKEN.")
+            raise RepoNotFoundError(
+                f"GitHub returned 404 for {context}.",
+                hint="Check the URL. RepoLens supports public GitHub repositories only.",
+            )
         if status == 451:
             raise GitHostError("GitHub refused to serve this repository (DMCA/unavailable).")
         raise GitHostError(f"GitHub API error {status} for {context}: {response.text[:200]}")
@@ -95,10 +99,10 @@ class GitHubClient:
         response = await self.client.get(f"/repos/{owner}/{name}")
         self._raise_for_status(response, f"{owner}/{name}")
         data = response.json()
-        if data.get("private") and not self.settings.allow_private_repos:
+        if data.get("private"):
             raise GitHostError(
-                "Private repositories are disabled for this deployment.",
-                hint="Use a public repository, or enable ALLOW_PRIVATE_REPOS only in a trusted single-tenant deployment.",
+                "Private repositories are not supported.",
+                hint="Use a public GitHub repository URL.",
             )
         return _to_metadata(data)
 
@@ -176,7 +180,7 @@ class GitHubClient:
                                 max_bytes: int, max_files: int) -> Path:
         archive = destination / "source.tar.gz"
         size = 0
-        url = f"{self.settings.github_api_base}/repos/{owner}/{name}/tarball/{ref}"
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{name}/tarball/{ref}"
         async with self.client.stream("GET", url, headers=self._headers, follow_redirects=True) as response:
             self._raise_for_status(response, f"{owner}/{name}/tarball/{ref}")
             with open(archive, "wb") as handle:
@@ -187,7 +191,7 @@ class GitHubClient:
                         archive.unlink(missing_ok=True)
                         raise RepoTooLargeError(
                             f"Repository archive exceeds the configured limit of {max_bytes // (1024 * 1024)} MiB.",
-                            hint="Raise MAX_REPO_BYTES, or set GITHUB_TOKEN for a higher rate limit.",
+                            hint="Choose a smaller repository or increase MAX_REPO_BYTES if the larger download is expected."
                         )
                     handle.write(chunk)
         root = await asyncio.to_thread(_extract_tarball, archive, destination, max_bytes, max_files)
@@ -199,13 +203,9 @@ class GitHubClient:
         if target.exists():
             shutil.rmtree(target, ignore_errors=True)
 
-        def _clone_url() -> str:
-            if self.settings.github_token:
-                return f"https://x-access-token:{self.settings.github_token}@github.com/{owner}/{name}.git"
-            return f"https://github.com/{owner}/{name}.git"
-
         env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"}
-        command = ["git", "clone", "--depth", "1", "--single-branch", "--branch", ref, _clone_url(), str(target)]
+        clone_url = f"https://github.com/{owner}/{name}.git"
+        command = ["git", "clone", "--depth", "1", "--single-branch", "--branch", ref, clone_url, str(target)]
         process = await asyncio.create_subprocess_exec(
             *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env,
         )
@@ -223,7 +223,6 @@ class GitHubClient:
             raise
         if process.returncode != 0:
             message = (stderr or b"").decode("utf-8", "replace")
-            message = message.replace(self.settings.github_token or "\0", "***")
             if "not found" in message.lower() or "could not read" in message.lower():
                 raise RepoNotFoundError(f"git clone failed for {owner}/{name}: repository or branch not found.",
                                         detail=message[:300])

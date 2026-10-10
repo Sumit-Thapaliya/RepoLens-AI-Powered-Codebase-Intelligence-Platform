@@ -7,17 +7,16 @@ import {
   cancelAnalysis as cancelRun,
   createAnalysis,
   getAnalysis,
-  clearResponseCache,
   heartbeatAnalysis,
   listAnalyses,
-  prefetchAnalysis,
   releaseAnalysis,
 } from "@/lib/api";
 import type { Analysis, RepoMetadata } from "@/lib/types";
 import { useToast } from "@/components/ui/states";
+import { useCapabilities } from "@/lib/hooks";
 import { getWindowId, readCurrentRun, readWindowRuns, writeCurrentRun, writeWindowRuns } from "@/lib/window";
 
-/** How often this window tells the server it is still open. */
+/** How often an active, visible tab refreshes its inactivity lease. */
 const HEARTBEAT_MS = 20_000;
 
 type RunSummary = Analysis & { repo?: { id: string; full_name?: string; url?: string } };
@@ -53,6 +52,7 @@ export function useAnalysisContext(): AnalysisContextValue {
 
 export function AnalysisProvider({ children }: { children: React.ReactNode }) {
   const { push } = useToast();
+  const { data: runtimeCapabilities } = useCapabilities();
   const { mutate: mutateSWR } = useSWRConfig();
   const clearSWRAnalysisCache = React.useCallback((id: string) => {
     void mutateSWR(
@@ -85,6 +85,7 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
     }
     try {
       const payload = await listAnalyses(ids);
+      setError(null);
       const found = payload.analyses;
       const foundIds = new Set(found.map((run) => run.id));
       const kept = ids.filter((id) => foundIds.has(id));
@@ -92,10 +93,9 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
       const hadExpiredRun = expiredIds.length > 0;
       if (hadExpiredRun) {
         writeWindowRuns(kept);
-        clearResponseCache();
         expiredIds.forEach(clearSWRAnalysisCache);
       }
-      setExpired(hadExpiredRun);
+      if (hadExpiredRun) setExpired(true);
       setAnalyses(found);
       return found;
     } catch (cause) {
@@ -129,44 +129,99 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
     };
   }, [fetchRuns, commitCurrent]);
 
-  /* Heartbeat: keeps this window's runs alive while the window is open. */
+  /* The lease follows human activity, not merely an open browser tab. */
+  const inactivityWindowMs = (runtimeCapabilities?.limits.window_ttl_seconds ?? 1800) * 1000;
+  const heartbeatIntervalMs = Math.max(250, Math.min(HEARTBEAT_MS, inactivityWindowMs / 3));
+  const recentActivityMs = Math.min(inactivityWindowMs, heartbeatIntervalMs + 1000);
   React.useEffect(() => {
     let cancelled = false;
-    const ping = async () => {
+    let requestInFlight = false;
+    let lastActivityAt = Date.now();
+    let lastPingAt = 0;
+
+    const expireIfOverdue = (now: number) => {
+      if (now - lastActivityAt < inactivityWindowMs + recentActivityMs) return false;
+      const ids = readWindowRuns();
+      if (ids.length === 0) return false;
+      setExpired(true);
+      setError(null);
+      setAnalyses([]);
+      setAnalysis(null);
+      setRepo(null);
+      writeWindowRuns([]);
+      ids.forEach(clearSWRAnalysisCache);
+      if (ids.includes(readCurrentRun() ?? "")) commitCurrent(null);
+      return true;
+    };
+
+    const ping = async (force = false) => {
+      const now = Date.now();
+      if (cancelled || requestInFlight || expireIfOverdue(now)) return;
+      if (
+        document.visibilityState !== "visible" ||
+        (!force && now - lastActivityAt >= recentActivityMs)
+      ) return;
       const ids = readWindowRuns();
       if (ids.length === 0) return;
-      const windowId = getWindowId();
-      const results = await Promise.all(
-        ids.map(async (id) => {
-          try {
-            await heartbeatAnalysis(id, windowId);
-            return { id, gone: false };
-          } catch (cause) {
-            return { id, gone: cause instanceof ApiError && cause.status === 404 };
-          }
-        }),
-      );
-      const gone = results.filter((result) => result.gone).map((result) => result.id);
-      if (gone.length === 0 || cancelled) return;
-      setExpired(true);
-      writeWindowRuns(readWindowRuns().filter((id) => !gone.includes(id)));
-      clearResponseCache();
-      gone.forEach(clearSWRAnalysisCache);
-      const runs = await fetchRuns();
-      setAnalysisId((current) => {
-        if (!current || !gone.includes(current)) return current;
-        const next = runs[0]?.id ?? null;
-        writeCurrentRun(next);
-        return next;
-      });
+      requestInFlight = true;
+      lastPingAt = now;
+      try {
+        const windowId = getWindowId();
+        const results = await Promise.all(
+          ids.map(async (id) => {
+            try {
+              await heartbeatAnalysis(id, windowId);
+              return { id, gone: false };
+            } catch (cause) {
+              return { id, gone: cause instanceof ApiError && cause.status === 404 };
+            }
+          }),
+        );
+        const gone = results.filter((result) => result.gone).map((result) => result.id);
+        if (gone.length === 0 || cancelled) return;
+        setExpired(true);
+        writeWindowRuns(readWindowRuns().filter((id) => !gone.includes(id)));
+        gone.forEach(clearSWRAnalysisCache);
+        const runs = await fetchRuns();
+        setAnalysisId((current) => {
+          if (!current || !gone.includes(current)) return current;
+          const next = runs[0]?.id ?? null;
+          writeCurrentRun(next);
+          return next;
+        });
+      } finally {
+        requestInFlight = false;
+      }
     };
-    void ping();
-    const timer = setInterval(() => void ping(), HEARTBEAT_MS);
+
+    const noteActivity = () => {
+      if (document.visibilityState === "hidden") return;
+      const now = Date.now();
+      if (expireIfOverdue(now)) return;
+      const wasIdle = now - lastActivityAt >= recentActivityMs;
+      lastActivityAt = now;
+      if (wasIdle && now - lastPingAt >= heartbeatIntervalMs) void ping(true);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if (expireIfOverdue(now)) return;
+      lastActivityAt = now;
+      void ping(true);
+    };
+
+    const activityEvents: (keyof WindowEventMap)[] = ["pointerdown", "keydown", "mousemove", "touchstart", "wheel"];
+    activityEvents.forEach((eventName) => window.addEventListener(eventName, noteActivity, { passive: true }));
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    void ping(true);
+    const timer = setInterval(() => void ping(), heartbeatIntervalMs);
     return () => {
       cancelled = true;
       clearInterval(timer);
+      activityEvents.forEach((eventName) => window.removeEventListener(eventName, noteActivity));
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [fetchRuns, clearSWRAnalysisCache]);
+  }, [fetchRuns, clearSWRAnalysisCache, inactivityWindowMs, heartbeatIntervalMs, recentActivityMs, commitCurrent]);
 
   /* Details for the selected run, polled while it is still executing. */
   React.useEffect(() => {
@@ -188,14 +243,27 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
         if (payload.analysis.status === "queued" || payload.analysis.status === "running") {
           timer = setTimeout(load, 1500);
         } else {
-          if (payload.analysis.status === "complete") prefetchAnalysis(analysisId);
           void fetchRuns();
         }
       } catch (cause) {
         if (cancelled) return;
         const apiError = cause instanceof ApiError ? cause : new ApiError(String(cause));
         setError(apiError);
-        if (apiError.status !== 404) timer = setTimeout(load, 4000);
+        if (apiError.status === 404) {
+          setExpired(true);
+          setError(null);
+          clearSWRAnalysisCache(analysisId);
+          writeWindowRuns(readWindowRuns().filter((id) => id !== analysisId));
+          setAnalyses((current) => current.filter((run) => run.id !== analysisId));
+          setAnalysis(null);
+          setRepo(null);
+          commitCurrent(null);
+          void fetchRuns().then((runs) => {
+            if (!cancelled && runs[0]) commitCurrent(runs[0].id);
+          });
+        } else {
+          timer = setTimeout(load, 4000);
+        }
       }
     };
     void load();
@@ -203,7 +271,7 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [analysisId, fetchRuns]);
+  }, [analysisId, fetchRuns, clearSWRAnalysisCache, commitCurrent]);
 
   /* Surface terminal state changes once. */
   const lastStatus = React.useRef<string | null>(null);
@@ -224,6 +292,7 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
       if (!readWindowRuns().includes(id)) return;
       commitCurrent(id);
       setAnalysis(null);
+      setExpired(false);
     },
     [commitCurrent],
   );
@@ -237,7 +306,6 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
       const previous = readWindowRuns();
       try {
         const result = await createAnalysis(url, branch ?? null, true, windowId);
-        clearResponseCache();
         previous.filter((id) => id !== result.analysis_id).forEach(clearSWRAnalysisCache);
         writeWindowRuns([result.analysis_id]);
         commitCurrent(result.analysis_id);
@@ -283,7 +351,6 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
       try {
         // Release it from this window; the server deletes it unless another open window still uses it.
         await releaseAnalysis(id, getWindowId());
-        clearResponseCache();
         clearSWRAnalysisCache(id);
         writeWindowRuns(readWindowRuns().filter((item) => item !== id));
         push({ tone: "success", title: "Analysis removed" });

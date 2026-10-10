@@ -1,4 +1,4 @@
-"""What this deployment can actually do - reported to the UI, never assumed."""
+"""Runtime capabilities reported to the frontend."""
 
 from __future__ import annotations
 
@@ -10,17 +10,12 @@ def describe_capabilities() -> dict:
     settings = get_settings()
     config = settings.public_config()
     database = database_state()
-    storage = config["storage"]
     return {
         "storage": {
-            "mode": storage["mode"],
-            "dialect": database.get("dialect"),
+            "mode": "memory",
+            "dialect": database.get("dialect", "sqlite"),
             "local_files": False,
-            "note": (
-                "Completed results are stored in the configured Postgres database (DATABASE_URL) until their owner lease expires; interrupted jobs are marked failed on restart."
-                if storage["mode"] == "postgres" else
-                "Results are kept in an in-memory SQLite database and cleared when the API restarts."
-            ),
+            "note": "Analysis results are temporary in-memory data and disappear when the API stops.",
         },
         "search": {
             "ranking": "lexical",
@@ -32,18 +27,13 @@ def describe_capabilities() -> dict:
             ),
         },
         "github": {
-            "authenticated": bool(settings.github_token),
-            "rate_limit": config["github"]["rate_limit"],
-            "private_repositories_allowed": settings.allow_private_repos,
-            "note": (
-                "GitHub token configured - 5000 requests/hour."
-                if settings.github_token else
-                "Anonymous GitHub access - 60 requests/hour. Set GITHUB_TOKEN for heavier use."
-            ),
+            "rate_limit": "60 requests/hour (anonymous)",
+            "private_repositories_allowed": False,
+            "note": "Anonymous access to public GitHub repositories only.",
         },
         "privacy": {
             "source_snippets_stored": settings.store_source_snippets,
-            "private_repositories_allowed": settings.allow_private_repos,
+            "private_repositories_allowed": False,
             "session_ttl_seconds": settings.session_ttl_seconds,
             "window_ttl_seconds": settings.window_ttl_seconds,
         },

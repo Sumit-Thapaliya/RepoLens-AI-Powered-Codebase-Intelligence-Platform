@@ -13,8 +13,6 @@ import asyncio
 import logging
 import threading
 import time
-from collections import OrderedDict
-from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -38,8 +36,6 @@ class AnalysisManager:
         self._tasks: dict[str, asyncio.Task] = {}
         self._cancel_events: dict[str, threading.Event] = {}
         self._semaphore: asyncio.Semaphore | None = None
-        self._history: "OrderedDict[str, dict]" = OrderedDict()
-        self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------- lifecycle
     @property
@@ -50,9 +46,6 @@ class AnalysisManager:
 
     def in_flight(self) -> list[str]:
         return [analysis_id for analysis_id, task in self._tasks.items() if not task.done()]
-
-    def recent_runs(self, limit: int = 20) -> list[dict]:
-        return list(self._history.values())[-limit:][::-1]
 
     # ----------------------------------------------------------------- create
     async def create_run(self, url: str, branch: str | None = None, force: bool = False,
@@ -120,49 +113,17 @@ class AnalysisManager:
             url = repo.url
         return await self.create_run(url, branch=branch, force=force, owner_session_id=owner_session_id)
 
-    def recover_interrupted_runs(self) -> list[str]:
-        """Mark queued/running database rows as interrupted after a process restart.
-
-        The worker queue is process-local, so an in-flight job cannot resume safely
-        after restart. Its checkout is removed at startup and the UI can start a fresh run.
-        """
-        now = datetime.now(timezone.utc)
-        recovered: list[str] = []
-        with session_scope() as session:
-            rows = session.execute(
-                select(Analysis).where(Analysis.status.in_(["queued", "running"]))
-            ).scalars().all()
-            for analysis in rows:
-                analysis.status = "failed"
-                analysis.message = "Analysis was interrupted when the API process restarted."
-                analysis.error = {
-                    "code": "interrupted",
-                    "message": analysis.message,
-                    "hint": "Start a new analysis. The abandoned temporary checkout was removed during startup.",
-                }
-                analysis.finished_at = now
-                if analysis.created_at:
-                    started = analysis.created_at
-                    if started.tzinfo is None:
-                        started = started.replace(tzinfo=timezone.utc)
-                    analysis.duration_ms = max(0, int((now - started).total_seconds() * 1000))
-                stages = [dict(stage) for stage in (analysis.stages or []) if isinstance(stage, dict)]
-                for stage in stages:
-                    if stage.get("status") in {"queued", "running"}:
-                        stage["status"] = "failed"
-                        stage["detail"] = "API process restarted before this stage completed."
-                        stage["finished_at"] = now.isoformat()
-                analysis.stages = stages
-                recovered.append(analysis.id)
-        return recovered
-
     # --------------------------------------------------------------- schedule
     def _schedule(self, analysis_id: str) -> None:
         cancel_event = threading.Event()
         self._cancel_events[analysis_id] = cancel_event
         task = asyncio.create_task(self._run(analysis_id, cancel_event))
         self._tasks[analysis_id] = task
-        task.add_done_callback(lambda _task: self._tasks.pop(analysis_id, None))
+        def _forget_task(_task: asyncio.Task) -> None:
+            self._tasks.pop(analysis_id, None)
+            self._cancel_events.pop(analysis_id, None)
+
+        task.add_done_callback(_forget_task)
 
     async def _run(self, analysis_id: str, cancel_event: threading.Event) -> None:
         async with self.semaphore:
@@ -170,10 +131,7 @@ class AnalysisManager:
                 self._mark_cancelled(analysis_id)
                 return
             pipeline = AnalysisPipeline(analysis_id, self.settings, cancel_event)
-            result = await pipeline.run()
-            self._history[analysis_id] = {**result, "finished_at": time.time()}
-            while len(self._history) > 50:
-                self._history.popitem(last=False)
+            await pipeline.run()
 
     def _mark_cancelled(self, analysis_id: str) -> None:
         with session_scope() as session:
@@ -201,11 +159,10 @@ class AnalysisManager:
             return False
         with session_scope() as session:
             delete_analysis_rows(session, analysis_id)
-        self._history.pop(analysis_id, None)
         return True
 
     def sweep_windows(self) -> list[str]:
-        """Discard runs with no live owner and sessions whose persisted leases expired."""
+        """Discard runs with no live owner and sessions whose leases expired."""
         with session_scope() as session:
             expired_ids = expire_windows(
                 session,
@@ -230,11 +187,7 @@ class AnalysisManager:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._tasks.clear()
-
-    # ------------------------------------------------------------- summaries
-    def progress_of(self, analysis_id: str) -> dict | None:
-        return self._history.get(analysis_id)
-
+        self._cancel_events.clear()
 
 def _apply_metadata(repo: Repo, metadata) -> None:
     repo.owner = metadata.owner

@@ -1,8 +1,7 @@
-"""Persistent per-window ownership and inactivity cleanup for analysis results.
+"""Per-window ownership and inactivity cleanup for in-memory analysis results.
 
 Ownership is scoped to a server-issued browser session and one browser tab. The
-records live in the same configured database as the analysis, so expiry continues
-to work after an API restart when Postgres is enabled.
+lease records live beside analysis data in RAM and are discarded when the API stops.
 """
 
 from __future__ import annotations
@@ -44,7 +43,7 @@ def release_owner(session: Session, analysis_id: str, session_id: str, window_id
     cutoff = time.time() - ttl_seconds
     live_owner = session.execute(
         select(AnalysisWindow.analysis_id)
-        .where(AnalysisWindow.analysis_id == analysis_id, AnalysisWindow.last_seen_at >= cutoff)
+        .where(AnalysisWindow.analysis_id == analysis_id, AnalysisWindow.last_seen_at > cutoff)
         .limit(1)
     ).first()
     return live_owner is None
@@ -55,7 +54,7 @@ def expire_windows(session: Session, ttl_seconds: int, session_ttl_seconds: int)
     now = time.time()
     cutoff = now - ttl_seconds
     # Rows left by a closed tab or an expired browser session must not keep artifacts alive.
-    session.execute(delete(AnalysisWindow).where(AnalysisWindow.last_seen_at < cutoff))
+    session.execute(delete(AnalysisWindow).where(AnalysisWindow.last_seen_at <= cutoff))
     session_cutoff = now - session_ttl_seconds
     session.execute(delete(BrowserSession).where(
         (BrowserSession.expires_at <= now) | (BrowserSession.last_seen_at < session_cutoff)

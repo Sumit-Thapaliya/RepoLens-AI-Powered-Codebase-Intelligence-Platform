@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -11,13 +12,14 @@ from ..core.db import session_scope
 from ..models.tables import Analysis, AnalysisWindow, Repo
 from ..services.analysis import get_manager
 from ..services.store import NotFoundError, analysis_payload, get_analysis, get_overview, repo_payload, require_complete
-from ..services.windows import add_owner, release_owner
+from ..services.windows import add_owner, owns, release_owner
 from .deps import (
     AnalyzeRequest,
     CurrentSession,
     DbSession,
     WindowId,
     WindowRequest,
+    WINDOW_TOUCH_INTERVAL_SECONDS,
     enforce_analysis_quota,
     require_window_owner,
 )
@@ -67,7 +69,11 @@ def list_analyses(
     statement = (
         select(Analysis)
         .join(AnalysisWindow, AnalysisWindow.analysis_id == Analysis.id)
-        .where(AnalysisWindow.session_id == session_id, AnalysisWindow.window_id == window_id)
+        .where(
+            AnalysisWindow.session_id == session_id,
+            AnalysisWindow.window_id == window_id,
+            AnalysisWindow.last_seen_at > time.time() - get_settings().window_ttl_seconds,
+        )
         .order_by(Analysis.created_at.desc())
     )
     if wanted:
@@ -121,10 +127,33 @@ async def cancel_run(analysis_id: str, session: DbSession) -> dict:
 
 
 @router.post("/{analysis_id}/heartbeat")
-def heartbeat(analysis_id: str, payload: WindowRequest, window_id: WindowId) -> dict:
-    """Keep this authenticated tab's persistent analysis lease alive."""
+def heartbeat(
+    analysis_id: str,
+    payload: WindowRequest,
+    session: DbSession,
+    session_id: CurrentSession,
+    window_id: WindowId,
+) -> dict:
+    """Refresh a lease only when the client reports recent user activity."""
     if payload.window_id != window_id:
         raise NotFoundError(f"Analysis `{analysis_id}` is no longer available.")
+    owner = owns(session, analysis_id, session_id, window_id)
+    if owner is None:
+        raise NotFoundError(f"Analysis `{analysis_id}` is no longer available.")
+
+    now = time.time()
+    ttl_seconds = get_settings().window_ttl_seconds
+    if now - owner.last_seen_at >= ttl_seconds:
+        raise NotFoundError(
+            f"Analysis `{analysis_id}` has expired.",
+            hint="This tab was inactive for too long. Start a fresh analysis to continue.",
+        )
+    touch_interval_seconds = min(WINDOW_TOUCH_INTERVAL_SECONDS, ttl_seconds / 3)
+    if now - owner.last_seen_at >= touch_interval_seconds:
+        owner.last_seen_at = now
+        session.commit()
+    else:
+        session.rollback()
     return {"alive": True}
 
 

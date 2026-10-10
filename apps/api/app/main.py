@@ -43,12 +43,9 @@ async def lifespan(app: FastAPI):
         cleanup_orphaned_workdirs()
         info = init_db()
         logger.info("Storage ready: %s (dialect=%s)", info.get("storage"), info.get("dialect"))
-        interrupted = get_manager().recover_interrupted_runs()
-        if interrupted:
-            logger.warning("Marked %s interrupted analysis run(s) after API restart", len(interrupted))
         capabilities = describe_capabilities()
-        logger.info("Search: %s | GitHub authenticated: %s", capabilities["search"]["ranking"],
-                    capabilities["github"]["authenticated"])
+        logger.info("Search: %s | GitHub access: anonymous, public repositories only",
+                    capabilities["search"]["ranking"])
     except Exception as exc:
         logger.error("Database initialisation failed: %s", exc)
     sweeper = asyncio.create_task(_sweep_closed_windows())
@@ -64,7 +61,9 @@ def create_app() -> FastAPI:
         description=(
             "Static codebase intelligence for GitHub repositories: architecture, workflows, dependencies, "
             "APIs, database usage, code quality and ranked search. Analysis artifacts use in-memory SQLite "
-            "unless DATABASE_URL is configured; temporary source checkouts are removed after each run."
+            "and disappear when the API stops; temporary source checkouts are removed after each run. "
+            "GitHub access is anonymous, so only public repositories are supported and GitHub's lower "
+            "anonymous API rate limit applies."
         ),
         version="0.1.0",
         lifespan=lifespan,

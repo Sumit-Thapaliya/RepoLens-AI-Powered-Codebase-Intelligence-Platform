@@ -32,6 +32,9 @@ def require_session(request: Request, response: Response, session: DbSession) ->
 CurrentSession = Annotated[str, Depends(require_session)]
 
 
+WINDOW_TOUCH_INTERVAL_SECONDS = 15
+
+
 def require_window_owner(
     request: Request,
     session: DbSession,
@@ -46,11 +49,15 @@ def require_window_owner(
     if analysis_id is None:
         return
     owner = owns(session, analysis_id, session_id, x_window_id)
+    now = time.time()
     if owner is None:
         raise NotFoundError(f"Analysis `{analysis_id}` was not found.",
                             hint="Analyses belong to the browser session and tab that started them.")
-    owner.last_seen_at = time.time()
-    session.commit()
+    if now - owner.last_seen_at >= get_settings().window_ttl_seconds:
+        raise NotFoundError(f"Analysis `{analysis_id}` has expired.",
+                            hint="This tab was inactive for too long. Start a fresh analysis to continue.")
+    # General API requests and background polling must not extend the inactivity lease.
+    session.rollback()
 
 
 def enforce_analysis_quota(session: Session, session_id: str, settings: Settings) -> None:

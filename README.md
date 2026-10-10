@@ -25,14 +25,15 @@ evidence. Anything heuristic is labelled as such.
 
 ## How storage and sessions work
 
-RepoLens downloads source into a per-analysis temporary directory, parses it without running repository code, and removes the checkout when analysis ends. A startup sweep also removes checkouts left by an ungraceful restart.
+RepoLens downloads source into a per-analysis temporary directory, parses it without running repository
+code, and removes the checkout when analysis ends. A startup sweep also removes checkouts left by an
+ungraceful restart.
 
-* **RAM-only by default.** With no `DATABASE_URL`, normalized analysis artifacts are held in an in-memory SQLite database and are cleared when the API process restarts.
-* **Optional Postgres.** Setting `DATABASE_URL` retains completed analysis artifacts across restarts. Because the worker queue is process-local, queued/running rows are marked interrupted on startup; users can reanalyse. The same inactivity cleanup deletes expired artifacts from Postgres.
+* **RAM-only SQLite.** Analysis results and browser-session records live in an in-memory SQLite database. They are cleared when the API process stops; there is no persistent database configuration.
 * **Session isolation.** The server issues an opaque `HttpOnly` cookie; only its SHA-256 digest is stored. Analysis leases are bound to that session and a browser tab. Caller-supplied analysis IDs alone do not grant access.
-* **Automatic expiry.** Results are deleted after the last owning tab stops heartbeating for `WINDOW_TTL_SECONDS` (default 30 minutes), plus at most one cleanup interval. The UI explains when a run has expired or disappeared after a restart and lets the user reanalyse.
-* **Source retention.** Full file contents are not stored with analysis records. By default, persisted search chunks contain deduplicated identifier terms, not source excerpts; the Code Explorer fetches the requested file from GitHub on demand. Set `STORE_SOURCE_SNIPPETS=true` only in a trusted deployment if retaining short excerpts until expiry is acceptable.
-* **Private repositories are opt-in.** `ALLOW_PRIVATE_REPOS=false` by default. A server-side `GITHUB_TOKEN` is shared by the service, so do not enable private-repo access on a multi-user public service without per-user GitHub OAuth.
+* **User-inactivity expiry.** A visible tab heartbeats only while pointer, keyboard, touch or wheel input has occurred within the last heartbeat interval. Background polling and an open-but-idle tab never extend the lease. The server expires results after `WINDOW_TTL_SECONDS` (default 30 minutes) from the last heartbeat (normally within 20 seconds of the last input); expired runs disappear from listings immediately and the sweeper removes their rows within one cleanup interval. The client also clears its local analysis and SWR data at expiry.
+* **Public repositories only.** RepoLens accesses GitHub anonymously, so private repositories are not supported. Anonymous GitHub API requests have GitHub's lower rate limit (typically 60 requests per hour); busy usage may need to wait for the limit to reset.
+* **Source retention.** Full file contents are not stored with analysis records. By default, search keeps deduplicated identifier terms, not source excerpts; the Code Explorer fetches the requested file from GitHub on demand. Set `STORE_SOURCE_SNIPPETS=true` only if keeping short excerpts in RAM until expiry is acceptable.
 * **No AI.** Analysis, search and impact are deterministic. Nothing is sent to a language model.
 
 ## Dashboard data loading
@@ -49,7 +50,7 @@ git clone <this repo> repolens && cd repolens
 # 1. API
 python -m venv .venv && source .venv/bin/activate
 pip install -e packages/shared -e packages/parser -e packages/graph -e apps/api
-cp .env.example .env                  # optional: add GITHUB_TOKEN, or DATABASE_URL for Neon
+cp .env.example .env                  # optional runtime settings; no token or database URL is needed
 cd apps/api && python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 # 2. Web app (second terminal)
@@ -62,13 +63,17 @@ Paste `https://github.com/fastapi/full-stack-fastapi-template` into the header a
 ## Quick start (Docker)
 
 ```bash
-cp .env.example .env          # optional
+cp .env.example .env          # optional runtime settings; no GitHub token or database URL is needed
 docker compose up --build     # web on http://localhost:3000, API on http://localhost:8000
 ```
 
 The stack has two services, `api` and `web`. The web server proxies `/backend/*` to the API on the
-internal network, so the browser only talks to one origin. There are no host volumes; checkouts use
-container-local temporary storage during analysis and are removed after each run or on startup. For an HTTPS deployment, set `APP_ENV=production` (to enable Secure session cookies) and set `CORS_ORIGINS` to only the origins you operate.
+internal network, so the browser only talks to one origin. There are no host volumes; source checkouts
+use container-local temporary storage and are removed after each run or on startup. Results live only
+in RAM and disappear when the API stops. RepoLens uses anonymous GitHub access for public repositories
+only; private repositories are unsupported and GitHub's lower anonymous rate limit applies. For an HTTPS
+deployment, set `APP_ENV=production` (to enable Secure session cookies) and set `CORS_ORIGINS` to only
+the origins you operate.
 
 ## Features
 
@@ -100,7 +105,7 @@ GitHub URL ──▶ validate + metadata (GitHub API)
             ──▶ trace workflows      from entry points through services to data
             ──▶ quality + insights   complexity, coupling, duplication, missing tests
             ──▶ index for search     symbol, file and doc identifiers (no source excerpts by default)
-            ──▶ store results        in memory, or in DATABASE_URL when set; expire by session lease
+            ──▶ store results        in RAM-only SQLite; expire by session lease or API shutdown
 ```
 
 Every stage reports progress and can be cancelled. A run that exceeds `MAX_ANALYSIS_SECONDS` (default
@@ -136,7 +141,7 @@ repolens/
 │   │   └── app/
 │   │       ├── api/                routes: system, repos, analyses, insights
 │   │       ├── analyzers/          endpoints, database, insights, docs, pipeline
-│   │       ├── core/               config, db (memory or DATABASE_URL), logging, errors, capabilities
+│   │       ├── core/               config, in-memory SQLite db, logging, errors, capabilities
 │   │       ├── models/tables.py    analysis-scoped tables
 │   │       └── services/           github, store, search (lexical), analysis manager, impact
 │   └── web/                        Next.js 15 + Tailwind UI
@@ -154,25 +159,36 @@ repolens/
 
 ## Configuration
 
-Everything is set through environment variables. See [`.env.example`](.env.example) for the full list.
+Runtime settings are set through environment variables. See [`.env.example`](.env.example) for defaults.
+RepoLens does not accept a `GITHUB_TOKEN` or `DATABASE_URL`: repositories must be public, and results
+stay in RAM. Anonymous GitHub API usage is subject to GitHub's lower rate limit (typically 60 requests
+per hour).
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `DATABASE_URL` | empty (in memory) | Optional Postgres URL; retained records are still expired by the session lease sweeper |
-| `GITHUB_TOKEN` | empty | Higher GitHub API rate limit; private repos remain denied unless explicitly enabled |
-| `ALLOW_PRIVATE_REPOS` | `false` | Allow private repositories visible to the server token; only for trusted single-tenant deployments |
+| `APP_ENV` | `development` | Set to `production` to enable Secure session cookies |
+| `LOG_LEVEL` | `INFO` | API log verbosity |
+| `CORS_ORIGINS` | localhost:3000 | Allowed browser origins for direct API calls with credentials |
 | `MAX_ANALYSIS_SECONDS` | `1800` | Maximum repository-download time plus cooperative analysis deadline |
-| `MAX_REPO_BYTES` | `104857600` | 100 MiB cap on downloaded and expanded source (`0` disables the cap and clone fallback guard) |
+| `MAX_REPO_BYTES` | `104857600` | 100 MiB cap on downloaded and expanded source (`0` disables the cap and allows clone fallback) |
 | `MAX_FILES` / `MAX_FILE_BYTES` | `4000` / `1048576` | Maximum indexed text files and per-file size threshold |
 | `MAX_ACTIVE_ANALYSES_PER_SESSION` | `2` | Limit concurrent jobs per browser session |
 | `MAX_ANALYSES_PER_HOUR` | `20` | Limit job submissions per browser session |
-| `WINDOW_TTL_SECONDS` | `1800` | Idle time after which a tab's analysis lease expires |
+| `WINDOW_TTL_SECONDS` / `WINDOW_SWEEP_SECONDS` | `1800` / `30` | Idle lease expiry and cleanup interval |
 | `SESSION_TTL_SECONDS` | `2592000` | Sliding lifetime for the HttpOnly browser session |
-| `STORE_SOURCE_SNIPPETS` | `false` | Opt in to persisting short source excerpts until analysis expiry |
+| `STORE_SOURCE_SNIPPETS` | `false` | Keep short source excerpts in RAM until analysis expiry |
 | `ANALYSIS_WORKERS` | `2` | Concurrent analyses per API process |
-| `CORS_ORIGINS` | localhost:3000 | Allowed browser origins for direct API calls with credentials |
+| `API_INTERNAL_URL` | `http://127.0.0.1:8000` | Server-side Next.js proxy target |
+| `NEXT_PUBLIC_API_BASE` | `/backend` | Browser-facing same-origin API path |
 
-`GET /api/system/capabilities` reports the running storage mode, effective limits, and source/private-repo policy. Per-session quotas are guardrails, not a full abuse-prevention system; public deployments should also apply edge/IP rate limiting and monitoring.
+`GET /api/system/capabilities` reports the in-memory storage mode, effective limits, and public-only GitHub policy. Per-session quotas are guardrails, not a full abuse-prevention system; public deployments should also apply edge/IP rate limiting and monitoring.
+
+## Local verification
+
+From the repository root, run `python -m unittest discover -s apps/api/tests -v` for local HTTP
+lifecycle, expiry, restart, process-local concurrency, a complete fixture-repository analysis, and
+bounded chunk-memory checks. From `apps/web`, run `npm run typecheck` and `npm run build` to validate
+the frontend.
 
 ## API reference
 
@@ -188,5 +204,5 @@ While the API is running, every endpoint, with request and response shapes, is l
   parsed into symbols and edges. SQL, GraphQL, Proto, YAML/JSON/TOML, Markdown, shell and Dockerfiles are
   not parsed into symbols; paths remain searchable by default, while body text is indexed only when
   `STORE_SOURCE_SNIPPETS=true`.
-* Run one API process/replica. Analysis tasks are process-local; `DATABASE_URL` persists completed artifacts but does not provide a shared job queue. Horizontal scaling needs a distributed worker system (not included).
+* Run one API process/replica. Analysis tasks and the SQLite database are process-local; results disappear when that process stops. Horizontal scaling is outside the current design.
 * Not implemented: notifications and pull-request or branch diffing.

@@ -46,27 +46,7 @@ export class ApiError extends Error {
 
 type RequestOptions = Omit<RequestInit, "body"> & { body?: unknown; query?: Record<string, string | number | boolean | undefined | null> };
 
-/* ------------------------------------------------------------ response cache
- * Data of a finished analysis never changes, so its GET responses are kept in memory for this
- * window. Switching pages then shows the data at once. The cache is emptied whenever the window
- * lets go of an analysis, and it lives only in this window's memory (nothing is written to disk).
- */
-const RESPONSE_CACHE_MAX_ENTRIES = 100;
-const RESPONSE_CACHE_MAX_BYTES = 32 * 1024 * 1024;
-const RESPONSE_CACHE_MAX_ENTRY_BYTES = 8 * 1024 * 1024;
-type ResponseCacheEntry = { value: unknown; size: number };
-const responseCache = new Map<string, ResponseCacheEntry>();
-const inFlight = new Map<string, Promise<unknown>>();
-let responseCacheBytes = 0;
-let cacheGeneration = 0;
-
-export function clearResponseCache(): void {
-  cacheGeneration += 1;
-  responseCache.clear();
-  responseCacheBytes = 0;
-  inFlight.clear();
-}
-
+/* ------------------------------------------------------------- API session */
 let sessionPromise: Promise<void> | null = null;
 
 /** Bootstrap the server-issued HttpOnly session before making protected requests. */
@@ -85,55 +65,12 @@ async function ensureApiSession(): Promise<void> {
           hint: "Refresh the page and try again.",
         });
       }
-      const result = (await response.json()) as { new_session?: boolean };
-      if (result.new_session) clearResponseCache();
     }).catch((error) => {
       sessionPromise = null;
       throw error;
     });
   }
   await sessionPromise;
-}
-
-function cachedGet<T>(path: string, options: { query?: Record<string, string | number | boolean | undefined | null> } = {}): Promise<T> {
-  const key = `${path}?${JSON.stringify(options.query ?? {})}`;
-  const cached = responseCache.get(key);
-  if (cached) {
-    responseCache.delete(key);
-    responseCache.set(key, cached);
-    return Promise.resolve(cached.value as T);
-  }
-  const pending = inFlight.get(key);
-  if (pending) return pending as Promise<T>;
-
-  const generation = cacheGeneration;
-  const request = apiRequest<T>(path, options).then(
-    (value) => {
-      if (generation === cacheGeneration) {
-        inFlight.delete(key);
-        const serialized = JSON.stringify(value);
-        const size = serialized ? serialized.length * 2 : 0;
-        if (size <= RESPONSE_CACHE_MAX_ENTRY_BYTES) {
-          responseCache.set(key, { value, size });
-          responseCacheBytes += size;
-          while (responseCache.size > RESPONSE_CACHE_MAX_ENTRIES || responseCacheBytes > RESPONSE_CACHE_MAX_BYTES) {
-            const oldest = responseCache.keys().next().value;
-            if (oldest === undefined) break;
-            const removed = responseCache.get(oldest);
-            responseCache.delete(oldest);
-            responseCacheBytes -= removed?.size ?? 0;
-          }
-        }
-      }
-      return value;
-    },
-    (error) => {
-      if (generation === cacheGeneration) inFlight.delete(key);
-      throw error;
-    },
-  );
-  inFlight.set(key, request);
-  return request;
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -280,31 +217,31 @@ export const getAnalysis = (analysisId: string, includeOverview = false) =>
 export const cancelAnalysis = (analysisId: string) => apiRequest<{ analysis: Analysis }>(`/analyses/${analysisId}/cancel`, { method: "POST" });
 export const deleteAnalysis = (analysisId: string) =>
   apiRequest<{ deleted: string; pending: boolean }>(`/analyses/${analysisId}`, { method: "DELETE" });
-export const getBundle = (analysisId: string) => cachedGet<Record<string, unknown>>(`/analyses/${analysisId}/bundle`);
+export const getBundle = (analysisId: string) => apiRequest<Record<string, unknown>>(`/analyses/${analysisId}/bundle`);
 
 /* ---------------------------------------------------------------- insights */
 
-export const getOverview = (analysisId: string) => cachedGet<Overview>(`/analyses/${analysisId}/overview`);
-export const getArchitecture = (analysisId: string) => cachedGet<ArchitectureGraph>(`/analyses/${analysisId}/architecture`);
+export const getOverview = (analysisId: string) => apiRequest<Overview>(`/analyses/${analysisId}/overview`);
+export const getArchitecture = (analysisId: string) => apiRequest<ArchitectureGraph>(`/analyses/${analysisId}/architecture`);
 export const getWorkflows = (analysisId: string, category?: string, limit = 60) =>
-  cachedGet<WorkflowsPayload>(`/analyses/${analysisId}/workflows`, { query: { category, limit } });
+  apiRequest<WorkflowsPayload>(`/analyses/${analysisId}/workflows`, { query: { category, limit } });
 export const getWorkflow = (analysisId: string, workflowId: string) =>
-  cachedGet<{ workflow: Workflow }>(`/analyses/${analysisId}/workflows/${workflowId}`);
+  apiRequest<{ workflow: Workflow }>(`/analyses/${analysisId}/workflows/${workflowId}`);
 export const getDependencies = (analysisId: string, view: "files" | "modules" = "files", limit = 220) =>
-  cachedGet<DependenciesPayload>(`/analyses/${analysisId}/dependencies`, { query: { view, limit } });
+  apiRequest<DependenciesPayload>(`/analyses/${analysisId}/dependencies`, { query: { view, limit } });
 export const getApis = (analysisId: string) =>
-  cachedGet<EndpointPayload>(`/analyses/${analysisId}/apis`);
-export const getDatabase = (analysisId: string) => cachedGet<DatabasePayload>(`/analyses/${analysisId}/database`);
-export const getQuality = (analysisId: string) => cachedGet<QualityPayload>(`/analyses/${analysisId}/quality`);
-export const getFrameworks = (analysisId: string) => cachedGet<{ frameworks: FrameworkInfo[] }>(`/analyses/${analysisId}/frameworks`);
-export const getInsights = (analysisId: string) => cachedGet<{ insights: Insight[]; note: string }>(`/analyses/${analysisId}/insights`);
+  apiRequest<EndpointPayload>(`/analyses/${analysisId}/apis`);
+export const getDatabase = (analysisId: string) => apiRequest<DatabasePayload>(`/analyses/${analysisId}/database`);
+export const getQuality = (analysisId: string) => apiRequest<QualityPayload>(`/analyses/${analysisId}/quality`);
+export const getFrameworks = (analysisId: string) => apiRequest<{ frameworks: FrameworkInfo[] }>(`/analyses/${analysisId}/frameworks`);
+export const getInsights = (analysisId: string) => apiRequest<{ insights: Insight[]; note: string }>(`/analyses/${analysisId}/insights`);
 
 /* ------------------------------------------------------------ code explorer */
 
-export const getFileTree = (analysisId: string) => cachedGet<{ root: FileNode; total: number }>(`/analyses/${analysisId}/files`);
-export const getFile = (analysisId: string, path: string) => cachedGet<FilePayload>(`/analyses/${analysisId}/file`, { query: { path } });
+export const getFileTree = (analysisId: string) => apiRequest<{ root: FileNode; total: number }>(`/analyses/${analysisId}/files`);
+export const getFile = (analysisId: string, path: string) => apiRequest<FilePayload>(`/analyses/${analysisId}/file`, { query: { path } });
 export const getSymbols = (analysisId: string, q?: string, limit = 50) =>
-  cachedGet<{ symbols: SymbolInfo[]; stats: Record<string, number>; query?: string }>(`/analyses/${analysisId}/symbols`, { query: { q, limit } });
+  apiRequest<{ symbols: SymbolInfo[]; stats: Record<string, number>; query?: string }>(`/analyses/${analysisId}/symbols`, { query: { q, limit } });
 export interface SymbolReference {
   path: string;
   symbol: string;
@@ -315,7 +252,7 @@ export interface SymbolReference {
 }
 
 export const getSymbolReferences = (analysisId: string, name: string, limit = 60) =>
-  cachedGet<{ name: string; references: SymbolReference[] }>(
+  apiRequest<{ name: string; references: SymbolReference[] }>(
     `/analyses/${analysisId}/symbols/${encodeURIComponent(name)}/references`,
     { query: { limit } },
   );
@@ -325,7 +262,7 @@ export const search = (analysisId: string, query: string, limit = 12) =>
     { method: "POST", body: { query, limit } },
   );
 export const grep = (analysisId: string, q: string, limit = 60) =>
-  cachedGet<{ query: string; matches: { path: string; line: number; text: string; kind?: string }[] }>(`/analyses/${analysisId}/grep`, {
+  apiRequest<{ query: string; matches: { path: string; line: number; text: string; kind?: string }[] }>(`/analyses/${analysisId}/grep`, {
     query: { q, limit },
   });
 
@@ -336,32 +273,8 @@ export const getImpact = (analysisId: string, path: string, symbol?: string | nu
 
 /* -------------------------------------------------------------------- docs */
 
-export const getDoc = (analysisId: string, kind: string) => cachedGet<DocumentPayload>(`/analyses/${analysisId}/docs/${kind}`);
+export const getDoc = (analysisId: string, kind: string) => apiRequest<DocumentPayload>(`/analyses/${analysisId}/docs/${kind}`);
 export const generateDoc = (analysisId: string, kind: string) =>
   apiRequest<DocumentPayload>(`/analyses/${analysisId}/docs`, { method: "POST", body: { kind } });
-
-/** Loads the data the main pages need, so switching pages shows results at once. */
-export function prefetchAnalysis(analysisId: string): void {
-  const jobs: (() => Promise<unknown>)[] = [
-    () => getOverview(analysisId),
-    () => getArchitecture(analysisId),
-    () => getDependencies(analysisId, "files", 220),
-    () => getWorkflows(analysisId, undefined, 80),
-    () => getApis(analysisId),
-    () => getQuality(analysisId),
-    () => getDatabase(analysisId),
-    () => getFileTree(analysisId),
-    () => getFrameworks(analysisId),
-  ];
-  void (async () => {
-    for (const job of jobs) {
-      try {
-        await job();
-      } catch {
-        // A failed prefetch is harmless: the page loads the data itself when it opens.
-      }
-    }
-  })();
-}
 
 export type { Endpoint, FileNode, Overview, Workflow };

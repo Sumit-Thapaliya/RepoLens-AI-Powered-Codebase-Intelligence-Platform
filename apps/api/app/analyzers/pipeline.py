@@ -211,21 +211,26 @@ class AnalysisPipeline:
             await self._stage_fetch(context)
             await self._stage_detect(context)
             await self._stage_parse(context)
-            artifacts = await self._stage_analyse(context)
-            await self._stage_embed(context, artifacts)
+            summary = await self._stage_analyse(context)
+            counts = {
+                "file_count": len(context.files) + len(context.skipped_files),
+                "parsed_count": sum(1 for parsed in context.parsed_files if parsed.parse_error is None),
+                "failed_count": sum(1 for parsed in context.parsed_files if parsed.parse_error),
+                "skipped_count": len(context.skipped_files),
+            }
+            # Release the decoded repository and analyzer aggregates before search indexing;
+            # the temporary checkout remains available for one-file-at-a-time chunk reads.
+            context.files.clear()
+            context.stats.clear()
+            await self._stage_embed(context)
             self._finalise_progress()
             self._finish(
                 status="complete",
-                message=f"Analysis complete - {len(context.parsed_files)} files parsed, "
-                        f"{artifacts['endpoints_count']} endpoints, {len(artifacts['workflows'])} workflows.",
-                counts={
-                    "file_count": len(context.files) + len(context.skipped_files),
-                    "parsed_count": sum(1 for parsed in context.parsed_files if parsed.parse_error is None),
-                    "failed_count": sum(1 for parsed in context.parsed_files if parsed.parse_error),
-                    "skipped_count": len(context.skipped_files),
-                },
+                message=f"Analysis complete - {counts['parsed_count']} files parsed, "
+                        f"{summary['endpoints_count']} endpoints, {summary['workflows_count']} workflows.",
+                counts=counts,
             )
-            return {"status": "complete", "analysis_id": self.analysis_id, **artifacts.get("summary", {})}
+            return {"status": "complete", "analysis_id": self.analysis_id, **summary["summary"]}
         except AnalysisCancelled:
             self._finish(status="cancelled", message="Analysis cancelled by user.")
             return {"status": "cancelled", "analysis_id": self.analysis_id}
@@ -479,15 +484,24 @@ class AnalysisPipeline:
         # ------------------------------------------------------------ persist
         overview = self._build_overview(context, graph, endpoints, database, workflows, quality, architecture)
         self._persist(context, graph, endpoints, database, workflows, quality, architecture, modules, overview)
-        return {"endpoints_count": len(endpoints), "workflows": workflows,
-                "summary": {"files": len(context.files), "endpoints": len(endpoints),
-                            "workflows": len(workflows), "issues": quality["summary"]["issues"]}}
+        return {
+            "endpoints_count": len(endpoints),
+            "workflows_count": len(workflows),
+            "summary": {
+                "files": len(context.files), "endpoints": len(endpoints),
+                "workflows": len(workflows), "issues": quality["summary"]["issues"],
+            },
+        }
 
-    async def _stage_embed(self, context: PipelineContext, artifacts: dict) -> None:
+    async def _stage_embed(self, context: PipelineContext) -> None:
         """Build the search index: text chunks only. No vectors are computed or stored."""
         self._set_stage(Stage.INDEXING, detail="Building the code search index", status="running")
         self._check_cancel()
         chunks = _build_chunks(context, max_chunks=MAX_CHUNKS, scope=self.analysis_id)
+        chunk_count = len(chunks)
+        # Parsed symbols are no longer needed once their bounded text chunks exist.
+        context.parsed_files.clear()
+        context.file_sizes.clear()
         _store_chunks(
             self.analysis_id,
             chunks,
@@ -497,8 +511,8 @@ class AnalysisPipeline:
             analysis = session.get(Analysis, self.analysis_id)
             if analysis:
                 analysis.provider_info = {**(analysis.provider_info or {}),
-                                          "search": {"ranking": "lexical", "chunks": len(chunks)}}
-        self._set_stage(Stage.INDEXING, detail=f"{len(chunks)} chunks indexed for search", status="done",
+                                          "search": {"ranking": "lexical", "chunks": chunk_count}}
+        self._set_stage(Stage.INDEXING, detail=f"{chunk_count} chunks indexed for search", status="done",
                         fraction=1.0)
 
     # ----------------------------------------------------------- artefacts
@@ -778,62 +792,109 @@ def _dedupe(rows: list) -> list:
 
 
 def _parsed_identifier_terms(parsed) -> list[str]:
-    """Extract structured code identifiers without retaining comments or literals."""
+    """Extract a bounded set of structured identifiers, never comments or literals."""
     terms: list[str] = []
+    seen: set[str] = set()
+
+    def add(term: str | None) -> bool:
+        if not isinstance(term, str):
+            return len(terms) >= 800
+        value = term.strip()[:256]
+        if value:
+            folded = value.casefold()
+            if folded not in seen:
+                seen.add(folded)
+                terms.append(value)
+        return len(terms) >= 800
+
     for symbol in parsed.symbols:
-        terms.extend([symbol.name, symbol.kind, symbol.parent or "", *symbol.params])
+        for term in (symbol.name, symbol.kind, symbol.parent):
+            if add(term):
+                return terms
+        for term in symbol.params:
+            if add(term):
+                return terms
         for call in symbol.calls:
-            terms.extend([call.name, call.qualifier or "", call.full or ""])
+            for term in (call.name, call.qualifier, call.full):
+                if add(term):
+                    return terms
     for item in parsed.imports:
-        terms.extend([item.module, *item.names])
-    terms.extend(parsed.exports)
+        if add(item.module):
+            return terms
+        for term in item.names:
+            if add(term):
+                return terms
+    for term in parsed.exports:
+        if add(term):
+            return terms
     for route in parsed.routes:
-        terms.extend([route.handler or "", route.request_model or "", route.response_model or ""])
+        for term in (route.handler, route.request_model, route.response_model):
+            if add(term):
+                return terms
     for model in parsed.models:
-        terms.append(model.name)
-        terms.extend(field.get("name", "") for field in model.fields if isinstance(field, dict))
+        if add(model.name):
+            return terms
+        for field in model.fields:
+            if isinstance(field, dict) and add(field.get("name")):
+                return terms
     for query in parsed.queries:
-        terms.extend([query.orm or "", query.kind])
-    return list(dict.fromkeys(term.strip() for term in terms if isinstance(term, str) and term.strip()))
+        for term in (query.orm, query.kind):
+            if add(term):
+                return terms
+    return terms
+
+
+def _chunk_source(context: PipelineContext, path: str) -> str:
+    """Read one source file on demand so indexing does not duplicate the whole checkout in RAM."""
+    if context.root is None:
+        return context.files.get(path, "")
+    relative = Path(path)
+    if relative.is_absolute() or ".." in relative.parts:
+        return ""
+    try:
+        return (context.root / relative).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return context.files.get(path, "")
 
 
 def _build_chunks(context: PipelineContext, max_chunks: int, scope: str = "") -> list[dict]:
-    """Symbol-level, file-level and doc-level chunks with real line ranges."""
+    """Build a bounded search index, reading source text one file at a time."""
     chunks: list[dict] = []
-    lines_cache: dict[str, list[str]] = {}
-
-    def lines_for(path: str) -> list[str]:
-        if path not in lines_cache:
-            lines_cache[path] = (context.files.get(path) or "").splitlines()
-        return lines_cache[path]
+    source_paths = context.file_sizes.keys() or context.files.keys()
 
     # Documentation first: README and docs/ are the highest-signal context.
-    for path, content in context.files.items():
+    for path in source_paths:
         lowered = path.lower()
         is_doc = lowered.endswith((".md", ".mdx", ".rst", ".adoc")) or lowered in {"readme", "docs/index.md"}
-        if not is_doc or not content.strip():
+        if not is_doc:
             continue
+        content = _chunk_source(context, path)
+        if not content.strip():
+            continue
+        line_start = 1
         for index in range(0, len(content), 4000):
-            text = content[index: index + 4000]
-            if len(text.strip()) < 40:
-                continue
-            line_start = content[:index].count("\n") + 1
-            chunks.append({"id": stable_id("chunk-doc", scope, path, index), "path": path, "symbol": None, "kind": "doc",
-                           "start_line": line_start, "end_line": line_start + text.count("\n"),
-                           "text": f"{path}\n{text}"[:6000], "identifiers": [],
-                           "tokens": max(1, len(text) // 4), "priority": 0})
-            if len(chunks) >= max_chunks:
-                return chunks[:max_chunks]
+            text = content[index:index + 4000]
+            if len(text.strip()) >= 40:
+                chunks.append({
+                    "id": stable_id("chunk-doc", scope, path, index), "path": path, "symbol": None, "kind": "doc",
+                    "start_line": line_start, "end_line": line_start + text.count("\n"),
+                    "text": f"{path}\n{text}"[:6000], "identifiers": [],
+                    "tokens": max(1, len(text) // 4),
+                })
+                if len(chunks) >= max_chunks:
+                    return chunks
+            line_start += text.count("\n")
 
     for parsed in context.parsed_files:
         if parsed.parse_error:
             continue
-        file_lines = lines_for(parsed.path)
+        content = _chunk_source(context, parsed.path)
+        file_lines = content.splitlines()
         identifiers = _parsed_identifier_terms(parsed)
         for symbol in parsed.symbols:
             if symbol.kind not in {"function", "method", "class", "component"}:
                 continue
-            body = "\n".join(file_lines[symbol.start_line - 1: min(len(file_lines), symbol.end_line)])
+            body = "\n".join(file_lines[symbol.start_line - 1:min(len(file_lines), symbol.end_line)])
             if len(body) > 4000:
                 body = body[:4000] + "\n… (truncated)"
             text = (
@@ -844,27 +905,28 @@ def _build_chunks(context: PipelineContext, max_chunks: int, scope: str = "") ->
                 + (f"purpose: {symbol.docstring}\n" if symbol.docstring else "")
                 + f"code:\n{body}"
             )
-            chunks.append({"id": stable_id("chunk-symbol", scope, parsed.path, symbol.name, symbol.start_line),
-                           "path": parsed.path, "symbol": symbol.name, "kind": "symbol", "identifiers": identifiers,
-                           "start_line": symbol.start_line, "end_line": symbol.end_line,
-                           "text": text[:6000], "tokens": max(1, len(text) // 4), "priority": 1})
+            chunks.append({
+                "id": stable_id("chunk-symbol", scope, parsed.path, symbol.name, symbol.start_line),
+                "path": parsed.path, "symbol": symbol.name, "kind": "symbol", "identifiers": identifiers,
+                "start_line": symbol.start_line, "end_line": symbol.end_line,
+                "text": text[:6000], "tokens": max(1, len(text) // 4),
+            })
             if len(chunks) >= max_chunks:
-                return chunks[:max_chunks]
-        # File-level summary chunk keeps context for files with no parseable symbols.
+                return chunks
+
+        # File-level summary chunks preserve context for files with few symbols.
         if len(parsed.symbols) <= 2:
-            content = context.files.get(parsed.path) or ""
             header = content[:2500]
             if len(header.strip()) > 60:
                 chunks.append({
                     "id": stable_id("chunk-file", scope, parsed.path), "path": parsed.path, "symbol": None, "kind": "file",
                     "start_line": 1, "end_line": max(1, header.count("\n")), "identifiers": identifiers,
                     "text": f"file: {parsed.path}\nlanguage: {parsed.language}\ncontent:\n{header}"[:6000],
-                    "tokens": max(1, len(header) // 4), "priority": 2,
+                    "tokens": max(1, len(header) // 4),
                 })
             if len(chunks) >= max_chunks:
-                return chunks[:max_chunks]
-    return chunks[:max_chunks]
-
+                return chunks
+    return chunks
 
 def _store_chunks(analysis_id: str, chunks: list[dict], *, store_source_snippets: bool = False) -> None:
     """Persist a bounded search index, not full source excerpts by default."""
@@ -878,33 +940,39 @@ def _store_chunks(analysis_id: str, chunks: list[dict], *, store_source_snippets
             # excludes comments, docstrings, string literals, syntax and line text.
             terms = []
             seen = set()
-            source_terms = [chunk["path"], chunk.get("symbol") or "", *chunk.get("identifiers", [])]
-            for source_term in source_terms:
-                spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", source_term)
-                candidates = [source_term, *token_re.findall(spaced.replace("_", " ").replace(".", " "))]
-                for term in candidates:
-                    if not term:
-                        continue
+            source_terms = [chunk["path"][:700], (chunk.get("symbol") or "")[:256], *chunk.get("identifiers", [])]
+            def add_index_term(term: str) -> bool:
+                if term:
                     folded = term.casefold()
                     if folded not in seen:
                         seen.add(folded)
                         terms.append(term)
-                    if len(terms) >= 800:
-                        break
-                if len(terms) >= 800:
+                return len(terms) >= 800
+
+            for source_term in source_terms:
+                if add_index_term(source_term):
+                    break
+                spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", source_term)
+                normalized = spaced.replace("_", " ").replace(".", " ")
+                if any(add_index_term(match.group(0)) for match in token_re.finditer(normalized)):
                     break
             indexed_text = "__INDEX__ " + " ".join(terms)
+        # Replace each temporary source excerpt with its compact index text in-place.
+        chunk["text"] = indexed_text
+        chunk["identifiers"] = []
         rows.append(ChunkRecord(
             id=chunk["id"], analysis_id=analysis_id, path=chunk["path"], symbol=chunk.get("symbol"),
             kind=chunk["kind"], start_line=chunk["start_line"], end_line=chunk["end_line"],
             text=indexed_text, tokens=chunk["tokens"],
         ))
 
+    chunks.clear()
     with session_scope() as session:
         session.query(ChunkRecord).filter(ChunkRecord.analysis_id == analysis_id).delete(synchronize_session=False)
         for start_index in range(0, len(rows), 1000):
             session.bulk_save_objects(rows[start_index: start_index + 1000])
             session.flush()
+    rows.clear()
 
 
 def _file_summary(parsed) -> str:

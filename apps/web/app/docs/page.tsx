@@ -8,10 +8,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ErrorState, InlineNote, SkeletonCard, useToast } from "@/components/ui/states";
-import { ApiError, generateDoc, getBundle, getCapabilities, getDoc } from "@/lib/api";
-import type { Capabilities, DocumentPayload } from "@/lib/types";
+import { generateDoc, getBundle, getDoc } from "@/lib/api";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
-import { formatBytes } from "@/lib/hooks";
+import { formatBytes, useApi, useCapabilities } from "@/lib/hooks";
 
 const KINDS = [
   { id: "readme", label: "Repository overview", detail: "What the project is, how it is structured, how to run it" },
@@ -23,44 +22,24 @@ function DocsBody() {
   const { analysisId, repo, analysis } = useAnalysisContext();
   const { push } = useToast();
   const [kind, setKind] = React.useState("readme");
-  const [documents, setDocuments] = React.useState<Record<string, DocumentPayload>>({});
-  const [capabilities, setCapabilities] = React.useState<Capabilities | null>(null);
-  const [loading, setLoading] = React.useState(true);
   const [regenerating, setRegenerating] = React.useState(false);
-  const [error, setError] = React.useState<ApiError | null>(null);
   const [bundleLoading, setBundleLoading] = React.useState(false);
-
-  const current = documents[kind];
-
-  const load = React.useCallback(
-    async (target: string) => {
-      if (!analysisId) return;
-      setLoading(true);
-      setError(null);
-      try {
-        const [doc, caps] = await Promise.all([getDoc(analysisId, target), getCapabilities().catch(() => null)]);
-        setDocuments((current) => ({ ...current, [target]: doc }));
-        setCapabilities(caps);
-      } catch (cause) {
-        setError(cause instanceof ApiError ? cause : new ApiError(String(cause)));
-      } finally {
-        setLoading(false);
-      }
-    },
-    [analysisId],
+  const { data: current, error, isLoading: loading, mutate } = useApi(
+    analysisId ? `document:${analysisId}:${kind}` : null,
+    () => getDoc(analysisId!, kind),
   );
+  const { data: capabilities } = useCapabilities();
 
-  React.useEffect(() => {
-    void load(kind);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analysisId, kind]);
+  const load = React.useCallback(async () => {
+    await mutate();
+  }, [mutate]);
 
   const regenerate = async () => {
     if (!analysisId) return;
     setRegenerating(true);
     try {
       const doc = await generateDoc(analysisId, kind);
-      setDocuments((current) => ({ ...current, [kind]: doc }));
+      await mutate(doc, { revalidate: false });
       push({ tone: "success", title: "Document regenerated", detail: "Built from this analysis." });
     } catch (cause) {
       push({ tone: "error", title: "Regeneration failed", detail: cause instanceof Error ? cause.message : String(cause) });
@@ -102,7 +81,7 @@ function DocsBody() {
   };
 
   if (loading && !current) return <SkeletonCard className="m-6" lines={12} />;
-  if (error && !current) return <ErrorState error={error} onRetry={() => void load(kind)} className="m-6" />;
+  if (error && !current) return <ErrorState error={error} onRetry={() => void load()} className="m-6" />;
 
   return (
     <div className="space-y-4 p-4 lg:p-6">
@@ -148,8 +127,8 @@ function DocsBody() {
             <div className="max-h-[70vh] overflow-y-auto p-5 scrollbar-thin">
               {KINDS.map((entry) => (
                 <TabsContent key={entry.id} value={entry.id} className="mt-0">
-                  {documents[entry.id] ? (
-                    <Markdown content={documents[entry.id].markdown} />
+                  {entry.id !== kind ? null : current ? (
+                    <Markdown content={current.markdown} />
                   ) : (
                     <p className="flex items-center gap-2 py-10 text-xs text-muted-foreground">
                       <Loader2 className="size-3.5 animate-spin" /> Loading document…
@@ -174,8 +153,8 @@ function DocsBody() {
                       <Server className="size-3.5" /> Storage
                     </span>
                     <span className="text-right">
-                      <span className="block">{capabilities.storage.mode === "postgres" ? "Postgres (DATABASE_URL)" : "In memory"}</span>
-                      <span className="text-2xs text-muted-foreground">{capabilities.storage.local_files ? "local files" : "nothing written to disk"}</span>
+                      <span className="block">In-memory SQLite</span>
+                      <span className="text-2xs text-muted-foreground">Temporary source checkouts are removed after each run.</span>
                     </span>
                   </li>
                   <li className="flex items-center justify-between gap-3 px-5 py-2.5">
@@ -190,7 +169,7 @@ function DocsBody() {
                   <li className="flex items-center justify-between gap-3 px-5 py-2.5">
                     <span className="text-muted-foreground">GitHub API</span>
                     <span className="text-right">
-                      <span className="block">{capabilities.github.authenticated ? "authenticated" : "anonymous"}</span>
+                      <span className="block">{capabilities.github.note}</span>
                       <span className="text-2xs text-muted-foreground">{capabilities.github.rate_limit}</span>
                     </span>
                   </li>

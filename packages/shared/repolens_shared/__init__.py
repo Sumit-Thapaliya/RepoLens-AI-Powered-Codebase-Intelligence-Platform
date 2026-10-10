@@ -26,7 +26,6 @@ from .errors import (
     DatabaseError,
     EmptyRepositoryError,
     GitHostError,
-    GitHubAuthError,
     GitHubRateLimitError,
     InvalidRepoUrlError,
     ParseError,

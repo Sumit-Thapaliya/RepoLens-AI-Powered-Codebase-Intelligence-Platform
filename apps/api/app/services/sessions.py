@@ -18,6 +18,7 @@ from ..core.config import Settings, get_settings
 from ..models.tables import BrowserSession
 
 SESSION_COOKIE_NAME = "repolens_session"
+SESSION_TOUCH_INTERVAL_SECONDS = 60
 
 
 def _digest(token: str) -> str:
@@ -79,8 +80,13 @@ def require_session(request: Request, response: Response, session: Session,
             detail="A valid RepoLens session is required.",
             headers={"WWW-Authenticate": "Session"},
         )
-    row.last_seen_at = now
-    row.expires_at = now + settings.session_ttl_seconds
-    session.commit()
+    session_id = row.id
+    if now - row.last_seen_at >= SESSION_TOUCH_INTERVAL_SECONDS:
+        row.last_seen_at = now
+        row.expires_at = now + settings.session_ttl_seconds
+        session.commit()
+    else:
+        # Avoid a SQLite write on every page request; the cookie itself is refreshed below.
+        session.rollback()
     _set_cookie(response, token, settings)
-    return row.id
+    return session_id

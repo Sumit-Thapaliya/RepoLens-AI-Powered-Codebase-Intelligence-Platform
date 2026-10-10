@@ -1,10 +1,7 @@
-"""Database engine, session management and schema creation.
+"""In-memory SQLite database and session management.
 
-Persisted analysis records use this policy:
-
-* ``DATABASE_URL`` set to a PostgreSQL URL (for example Neon) - results are stored there.
-* ``DATABASE_URL`` empty - results live in an in-memory SQLite database and disappear when
-  the process stops. Source checkouts are temporary files, removed after a run or on startup.
+All analysis records live in RAM and disappear when the API process stops. Source
+checkouts are temporary files and are deleted after a run or on startup.
 """
 
 from __future__ import annotations
@@ -22,59 +19,70 @@ from sqlalchemy.pool import QueuePool
 from repolens_shared.errors import DatabaseError
 
 from ..models.tables import Base, ChunkRecord, FileRecord
-from .config import Settings, get_settings
+from .config import get_settings
 
 logger = logging.getLogger(__name__)
 
 _engine: Engine | None = None
-_anchor = None  # keeps the in-memory database alive, see _build_engine
+_anchor = None  # Keeps the named in-memory database alive for the process lifetime.
 _SessionLocal: sessionmaker | None = None
 _state: dict[str, object] = {"dialect": "sqlite", "storage": "memory", "schema_ready": False}
 
-# In-memory mode shares ONE connection between threads. Writers therefore take this lock for the whole
-# transaction, so two analyses (or an analysis and a request) cannot interleave their writes.
-# It is reentrant, so a writer may open a nested scope in the same thread.
-_WRITE_LOCK = threading.RLock()
+# SQLite shared-cache memory databases allow concurrent reads but only one writer.
+# Hold this regular (cross-thread releasable) lock from the first DML statement to
+# transaction completion, covering both request sessions and background sessions.
+_SQLITE_WRITE_LOCK = threading.Lock()
+_LOCK_FLAG = "_repolens_sqlite_write_lock"
 
 
-def _build_engine(settings: Settings) -> Engine:
-    if settings.is_postgres:
-        kwargs: dict = {"future": True, "pool_pre_ping": True, "pool_size": 5, "max_overflow": 10,
-                        "pool_recycle": 1800}
-        url = settings.database_url
-        _state.update({"dialect": "postgresql", "storage": "postgres"})
-    else:
-        # In-memory only. A shared-cache memory database: every session gets its OWN connection to the
-        # same database. (One connection shared by threads is not safe in sqlite3 and can crash the process.)
-        # Writers are serialised by _WRITE_LOCK; readers do not take table locks (read_uncommitted).
-        url = "sqlite:///file:repolens_mem?mode=memory&cache=shared&uri=true"
-        kwargs = {"future": True, "poolclass": QueuePool, "pool_size": 10, "max_overflow": 20,
-                  "connect_args": {"check_same_thread": False}}
-        _state.update({"dialect": "sqlite", "storage": "memory"})
+def _release_record_lock(_dbapi_connection, connection_record) -> None:
+    # Pool check-in happens after the DBAPI commit/rollback has completed. The
+    # ConnectionEvents commit/rollback hooks fire before that operation, which
+    # would release the writer lock too early and allow another UPDATE to race.
+    if connection_record.info.pop(_LOCK_FLAG, False):
+        _SQLITE_WRITE_LOCK.release()
+
+
+def _build_engine() -> Engine:
+    url = "sqlite:///file:repolens_mem?mode=memory&cache=shared&uri=true"
     try:
-        engine = create_engine(url, **kwargs)
-    except Exception as exc:  # pragma: no cover - misconfiguration path
-        raise DatabaseError(f"Could not create database engine: {exc}",
-                            hint="Check DATABASE_URL in your environment settings.") from exc
+        engine = create_engine(
+            url,
+            future=True,
+            poolclass=QueuePool,
+            pool_size=10,
+            max_overflow=20,
+            connect_args={"check_same_thread": False, "timeout": 30},
+        )
+    except Exception as exc:  # pragma: no cover - defensive startup error
+        raise DatabaseError(f"Could not create the in-memory database: {exc}") from exc
 
-    if url.startswith("sqlite"):
-        @event.listens_for(engine, "connect")
-        def _sqlite_pragmas(dbapi_connection, _record):  # pragma: no cover
-            cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA foreign_keys=ON")
-            if not settings.is_postgres:
-                cursor.execute("PRAGMA read_uncommitted=1")
-            cursor.close()
-        global _anchor
-        # Hold one connection open for the life of the process, or the memory database is discarded.
-        _anchor = engine.raw_connection()
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_connection, _record):  # pragma: no cover - exercised on connect
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA read_uncommitted=1")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.close()
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _serialize_sqlite_writes(connection, _cursor, statement, _parameters, _context, _executemany):
+        first_word = statement.lstrip().split(None, 1)[0].upper() if statement.strip() else ""
+        if first_word in {"INSERT", "UPDATE", "DELETE", "REPLACE"} and not connection.info.get(_LOCK_FLAG):
+            _SQLITE_WRITE_LOCK.acquire()
+            connection.info[_LOCK_FLAG] = True
+
+    event.listen(engine.pool, "checkin", _release_record_lock)
+
+    global _anchor
+    _anchor = engine.raw_connection()
     return engine
 
 
 def get_engine() -> Engine:
     global _engine
     if _engine is None:
-        _engine = _build_engine(get_settings())
+        _engine = _build_engine()
     return _engine
 
 
@@ -87,28 +95,25 @@ def get_session_factory() -> sessionmaker:
 
 @contextmanager
 def session_scope() -> Iterator[Session]:
-    """Transactional scope. Rolls back and re-raises as DatabaseError."""
-    with _WRITE_LOCK:
-        factory = get_session_factory()
-        session = factory()
-        try:
-            yield session
-            session.commit()
-        except Exception as exc:
-            session.rollback()
-            if isinstance(exc, DatabaseError):
-                raise
-            logger.exception("Database transaction failed")
-            message = f"Database operation failed: {type(exc).__name__}: {exc}"
-            raise DatabaseError(message, hint="Check the API logs for the failing statement.") from exc
-        finally:
-            session.close()
+    """Transactional scope. Rolls back and wraps unexpected DB errors consistently."""
+    session = get_session_factory()()
+    try:
+        yield session
+        session.commit()
+    except Exception as exc:
+        session.rollback()
+        if isinstance(exc, DatabaseError):
+            raise
+        logger.exception("Database transaction failed")
+        message = f"Database operation failed: {type(exc).__name__}: {exc}"
+        raise DatabaseError(message, hint="Check the API logs for the failing statement.") from exc
+    finally:
+        session.close()
 
 
 def get_db() -> Iterator[Session]:
-    """FastAPI dependency."""
-    factory = get_session_factory()
-    session = factory()
+    """FastAPI request session. SQLite writes are serialized by engine transaction hooks."""
+    session = get_session_factory()()
     try:
         yield session
     finally:
@@ -116,16 +121,15 @@ def get_db() -> Iterator[Session]:
 
 
 def init_db() -> dict:
-    """Create the schema (idempotent), then apply the default source-retention policy."""
-    engine = get_engine()
-    Base.metadata.create_all(engine)
+    """Create the in-memory schema, then remove any legacy retained source text."""
+    Base.metadata.create_all(get_engine())
     _state["schema_ready"] = True
     _scrub_legacy_source_text()
     return dict(_state)
 
 
 def _scrub_legacy_source_text() -> None:
-    """Remove full files and legacy search excerpts when snippets are not explicitly enabled."""
+    """Remove legacy full files and search excerpts if they exist in the current process."""
     if get_settings().store_source_snippets:
         return
     try:

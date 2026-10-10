@@ -144,7 +144,7 @@ def grep(analysis_id: str, session: DbSession, q: str = Query(..., min_length=2)
 
 @router.post("/{analysis_id}/impact")
 def impact(analysis_id: str, payload: ImpactRequest, session: DbSession) -> dict:
-    """Impact analysis executed against the persisted graph (no re-analysis needed)."""
+    """Impact analysis executed against the stored graph (no re-analysis needed)."""
     require_complete(session, analysis_id)
     from ..services.impact import build_impact_report
 

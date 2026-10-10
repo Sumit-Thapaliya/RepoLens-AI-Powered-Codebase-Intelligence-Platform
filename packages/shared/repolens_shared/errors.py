@@ -40,18 +40,13 @@ class RepoNotFoundError(RepoLensError):
     http_status = 404
 
 
-class GitHubAuthError(RepoLensError):
-    code = "github_auth_error"
-    http_status = 401
-
-
 class GitHubRateLimitError(RepoLensError):
     code = "github_rate_limited"
     http_status = 429
 
     def __init__(self, message: str, *, reset_at: str | None = None, hint: str | None = None):
         super().__init__(message, hint=hint or (
-            "Set GITHUB_TOKEN in your .env to raise the limit from 60 to 5000 requests/hour."
+            "Wait for GitHub's rate-limit reset, then retry. RepoLens uses anonymous public API access."
         ))
         self.reset_at = reset_at
 

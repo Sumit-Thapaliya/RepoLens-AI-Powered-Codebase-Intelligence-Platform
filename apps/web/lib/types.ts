@@ -460,9 +460,9 @@ export interface ImpactReport {
 }
 
 export interface Capabilities {
-  storage: { mode: "memory" | "postgres"; dialect: string; local_files: boolean; note: string; max_stored_runs: number };
+  storage: { mode: "memory"; dialect: string; local_files: boolean; note: string };
   search: { ranking: string; note: string };
-  github: { authenticated: boolean; rate_limit: string; note: string };
+  github: { rate_limit: string; note: string };
   limits: Record<string, number>;
 }
 

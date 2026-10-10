@@ -1,8 +1,6 @@
 # ---------------------------------------------------------------------------
 # RepoLens API image - FastAPI analysis engine + Python packages
-# Nothing is written to a volume: analysis data lives in memory (or in the
-# Postgres database given by DATABASE_URL). Temporary checkouts are deleted
-# after every run.
+# Analysis data lives in memory. Temporary source checkouts are deleted after every run.
 # ---------------------------------------------------------------------------
 FROM python:3.12-slim AS base
 
