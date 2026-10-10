@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Info, Lightbulb, Loader2, Sparkles } from "lucide-react";
+import { ArrowRight, Info, Lightbulb, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PathLink } from "@/components/common/path-link";
 import { cn } from "@/lib/utils";
@@ -17,7 +17,6 @@ const NAV_TARGETS = new Set([
   "database",
   "quality",
   "explorer",
-  "chat",
   "impact",
   "search",
 ]);
@@ -116,12 +115,6 @@ export function InsightsPanel({ insights, loading }: { insights: Insight[]; load
             })}
           </ul>
         )}
-      </div>
-
-      <div className="border-t border-border p-3">
-        <Button size="sm" className="w-full" onClick={() => router.push("/chat")}>
-          <Sparkles /> Ask the repository anything
-        </Button>
       </div>
     </section>
   );

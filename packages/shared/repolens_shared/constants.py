@@ -20,7 +20,7 @@ class Stage(str, Enum):
     GRAPHING = "graphing"
     WORKFLOWS = "workflows"
     QUALITY = "quality"
-    EMBEDDING = "embedding"
+    INDEXING = "indexing"
     COMPLETE = "complete"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -38,7 +38,7 @@ ANALYSIS_STAGES: list[dict] = [
     {"id": Stage.GRAPHING, "label": "Building dependency graph", "weight": 0.10},
     {"id": Stage.WORKFLOWS, "label": "Detecting workflows", "weight": 0.06},
     {"id": Stage.QUALITY, "label": "Code quality analysis", "weight": 0.05},
-    {"id": Stage.EMBEDDING, "label": "Generating embeddings", "weight": 0.03},
+    {"id": Stage.INDEXING, "label": "Building search index", "weight": 0.03},
 ]
 
 STAGE_RANK: dict[str, int] = {str(s["id"].value if isinstance(s["id"], Stage) else s["id"]): i for i, s in enumerate(ANALYSIS_STAGES)}

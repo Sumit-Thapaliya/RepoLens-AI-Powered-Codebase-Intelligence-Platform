@@ -4,20 +4,18 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
 from repolens_shared.errors import RepoLensError
-from repolens_shared.utils import stable_id
 
 from ..analyzers.docs import generate_docs
-from ..ai.llm import get_llm
 from ..core.config import get_settings
 from ..core.db import session_scope
-from ..ai.chat import gather_context  # noqa: F401  (imported for symmetry in future endpoints)
-from ..models.tables import Analysis
+from ..models.tables import Repo
+from ..services.github import fetch_file_on_demand
+from .deps import require_window_owner
 from ..services.store import (
     file_tree,
-    get_analysis,
     get_architecture,
     get_database,
     get_dependencies,
@@ -39,7 +37,7 @@ from ..services.search import search as hybrid_search, search_text
 from .deps import DbSession, GenerateDocRequest, ImpactRequest, SearchRequest
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/analyses", tags=["insights"])
+router = APIRouter(prefix="/analyses", tags=["insights"], dependencies=[Depends(require_window_owner)])
 
 
 @router.get("/{analysis_id}/overview")
@@ -101,7 +99,16 @@ def files(analysis_id: str, session: DbSession) -> dict:
 @router.get("/{analysis_id}/file")
 def file_detail(analysis_id: str, session: DbSession, path: str = Query(..., min_length=1)) -> dict:
     analysis = require_complete(session, analysis_id)
-    return get_file(session, analysis_id, path, source_root=analysis.source_root)
+    repo = session.get(Repo, analysis.repo_id)
+    ref = analysis.commit_sha or analysis.branch or (repo.default_branch if repo else "HEAD")
+    settings = get_settings()
+
+    def fetch_remote(file_path: str) -> str | None:
+        if repo is None:
+            return None
+        return fetch_file_on_demand(settings, repo.owner, repo.name, file_path, ref)
+
+    return get_file(session, analysis_id, path, source_root=analysis.source_root, fetch_remote=fetch_remote)
 
 
 @router.get("/{analysis_id}/symbols")
@@ -120,18 +127,13 @@ def symbol_reference_list(analysis_id: str, name: str, session: DbSession, limit
 
 
 @router.post("/{analysis_id}/search")
-def semantic_search(analysis_id: str, payload: SearchRequest, session: DbSession) -> dict:
-    analysis = require_complete(session, analysis_id)
+def code_search(analysis_id: str, payload: SearchRequest, session: DbSession) -> dict:
+    """Ranked code search over the analysed chunks (lexical, deterministic, no model or key needed)."""
+    require_complete(session, analysis_id)
     settings = get_settings()
     hits = hybrid_search(session, settings, analysis_id, payload.query, limit=payload.limit,
                          paths=payload.paths, kinds=payload.kinds)
-    return {
-        "query": payload.query,
-        "hits": hits,
-        "backend": "pgvector" if settings.pgvector_enabled else "in-process",
-        "embedding": {"provider": settings.embeddings_provider,
-                      "neural": settings.embeddings_provider == "openai" and bool(settings.openai_api_key)},
-    }
+    return {"query": payload.query, "hits": hits, "ranking": "lexical"}
 
 
 @router.get("/{analysis_id}/grep")
@@ -160,9 +162,8 @@ def get_doc(analysis_id: str, kind: str, session: DbSession) -> dict:
 
 @router.post("/{analysis_id}/docs")
 def generate_doc(analysis_id: str, payload: GenerateDocRequest, session: DbSession) -> dict:
-    """Regenerate a document, optionally with LLM polishing."""
-    analysis = require_complete(session, analysis_id)
-    settings = get_settings()
+    """Regenerate a document from the analysed artefacts."""
+    require_complete(session, analysis_id)
     overview = get_overview(session, analysis_id)
     architecture = get_architecture(session, analysis_id)
     endpoints_payload = list_endpoints(session, analysis_id)
@@ -174,7 +175,6 @@ def generate_doc(analysis_id: str, payload: GenerateDocRequest, session: DbSessi
         payload.kind, overview=overview, architecture=architecture, endpoints=endpoints_payload["endpoints"],
         database=database, workflows=workflows_payload["workflows"], frameworks=frameworks_payload,
         graph_stats=overview.get("graph_stats", {}), quality=quality_payload,
-        llm=get_llm(settings) if payload.use_llm else None,
     )
     with session_scope() as write_session:
         store_document(write_session, analysis_id, document)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import re
 from datetime import datetime, timezone
@@ -27,9 +28,16 @@ def sha1(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8", "replace")).hexdigest()
 
 
+# Set by the analysis pipeline to its analysis id. Every id made during that run includes it, so two
+# runs of the same repository never produce the same primary key (the tables are shared).
+RUN_SCOPE: contextvars.ContextVar[str] = contextvars.ContextVar("repolens_run_scope", default="")
+
+
 def stable_id(*parts: object) -> str:
-    """Deterministic id for records whose identity is (type, path, name, line)."""
-    return sha1("::".join(str(p) for p in parts))[:20]
+    """Deterministic id for records whose identity is (type, path, name, line), scoped to the current run."""
+    scope = RUN_SCOPE.get()
+    items = (scope, *parts) if scope else parts
+    return sha1("::".join(str(p) for p in items))[:20]
 
 
 def truncate(text: str, limit: int = 400, suffix: str = "…") -> str:

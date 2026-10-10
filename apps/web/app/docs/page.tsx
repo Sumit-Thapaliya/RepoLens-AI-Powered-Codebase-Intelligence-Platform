@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { BookOpen, Download, FileJson, Loader2, RefreshCw, Server, Sparkles } from "lucide-react";
+import { BookOpen, Download, FileJson, Loader2, RefreshCw, Server, Database } from "lucide-react";
 import { RunGate } from "@/components/app/run-gate";
 import { Markdown } from "@/components/common/markdown";
 import { Badge } from "@/components/ui/badge";
@@ -27,7 +27,6 @@ function DocsBody() {
   const [capabilities, setCapabilities] = React.useState<Capabilities | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [regenerating, setRegenerating] = React.useState(false);
-  const [useLlm, setUseLlm] = React.useState(true);
   const [error, setError] = React.useState<ApiError | null>(null);
   const [bundleLoading, setBundleLoading] = React.useState(false);
 
@@ -60,13 +59,9 @@ function DocsBody() {
     if (!analysisId) return;
     setRegenerating(true);
     try {
-      const doc = await generateDoc(analysisId, kind, useLlm && capabilities?.llm.configured === true);
+      const doc = await generateDoc(analysisId, kind);
       setDocuments((current) => ({ ...current, [kind]: doc }));
-      push({
-        tone: "success",
-        title: "Document regenerated",
-        detail: doc.generated_by === "llm" ? "Polished by the configured LLM from the deterministic draft." : "Produced by the deterministic analyser.",
-      });
+      push({ tone: "success", title: "Document regenerated", detail: "Built from this analysis." });
     } catch (cause) {
       push({ tone: "error", title: "Regeneration failed", detail: cause instanceof Error ? cause.message : String(cause) });
     } finally {
@@ -115,23 +110,12 @@ function DocsBody() {
         <div>
           <h1 className="text-base font-semibold tracking-tight">Reports & export</h1>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Deterministic documents generated from this analysis
-            {repo ? ` for ${repo.full_name}@${analysis?.commit_sha?.slice(0, 7) ?? analysis?.branch ?? ""}` : ""}. They can
-            optionally be polished by the configured LLM — the draft always comes from the stored artefacts.
+            Documents built from this analysis
+            {repo ? ` for ${repo.full_name}@${analysis?.commit_sha?.slice(0, 7) ?? analysis?.branch ?? ""}` : ""}. Every
+            section comes from the analysed code, so the output is repeatable.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <label className="flex cursor-pointer items-center gap-2 text-2xs text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={useLlm}
-              disabled={!capabilities?.llm.configured}
-              onChange={(event) => setUseLlm(event.target.checked)}
-              className="accent-[hsl(var(--primary))]"
-            />
-            use LLM polish
-            {!capabilities?.llm.configured ? " (no key configured)" : ""}
-          </label>
           <Button variant="outline" size="sm" loading={regenerating} onClick={() => void regenerate()}>
             <RefreshCw /> Regenerate
           </Button>
@@ -187,29 +171,20 @@ function DocsBody() {
                 <>
                   <li className="flex items-center justify-between gap-3 px-5 py-2.5">
                     <span className="flex items-center gap-2 text-muted-foreground">
-                      <Sparkles className="size-3.5" /> LLM
+                      <Server className="size-3.5" /> Storage
                     </span>
                     <span className="text-right">
-                      <span className="block">{capabilities.llm.provider}</span>
-                      <span className="text-2xs text-muted-foreground">{capabilities.llm.mode}</span>
-                    </span>
-                  </li>
-                  <li className="flex items-center justify-between gap-3 px-5 py-2.5">
-                    <span className="text-muted-foreground">Embeddings</span>
-                    <span className="text-right">
-                      <span className="block">{capabilities.embeddings.provider}</span>
-                      <span className="text-2xs text-muted-foreground">dim {capabilities.embeddings.dim}</span>
+                      <span className="block">{capabilities.storage.mode === "postgres" ? "Postgres (DATABASE_URL)" : "In memory"}</span>
+                      <span className="text-2xs text-muted-foreground">{capabilities.storage.local_files ? "local files" : "nothing written to disk"}</span>
                     </span>
                   </li>
                   <li className="flex items-center justify-between gap-3 px-5 py-2.5">
                     <span className="flex items-center gap-2 text-muted-foreground">
-                      <Server className="size-3.5" /> Database
+                      <Database className="size-3.5" /> Search
                     </span>
                     <span className="text-right">
-                      <span className="block">{capabilities.database.dialect}</span>
-                      <span className="text-2xs text-muted-foreground">
-                        {capabilities.database.pgvector ? "pgvector enabled" : "vector ranking in process"}
-                      </span>
+                      <span className="block">keyword ranking</span>
+                      <span className="text-2xs text-muted-foreground">no AI, no embeddings</span>
                     </span>
                   </li>
                   <li className="flex items-center justify-between gap-3 px-5 py-2.5">
@@ -225,8 +200,7 @@ function DocsBody() {
               )}
             </ul>
             <div className="border-t border-border p-4">
-              <InlineNote>{capabilities?.llm.note ?? "LLM status unknown."}</InlineNote>
-              <InlineNote className="mt-2">{capabilities?.database.note ?? ""}</InlineNote>
+              <InlineNote>{capabilities?.storage.note ?? ""}</InlineNote>
             </div>
           </section>
 

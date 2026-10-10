@@ -88,7 +88,6 @@ def imported_symbol_map(parsed: ParsedFile) -> dict[str, str]:
 
 def build_dependency_graph(parsed_files: list[ParsedFile], external_packages: dict[str, int] | None = None) -> GraphResult:
     result = GraphResult()
-    by_path = {parsed.path: parsed for parsed in parsed_files}
 
     all_nodes: dict[str, FileNode] = {}
     for parsed in parsed_files:

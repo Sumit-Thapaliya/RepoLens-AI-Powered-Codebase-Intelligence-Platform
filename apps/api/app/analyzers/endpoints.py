@@ -102,7 +102,6 @@ def resolve_router_prefixes(parsed_files: list[ParsedFile]) -> dict[tuple[str, s
 def build_endpoints(parsed_files: list[ParsedFile], graph: GraphResult, scope: str = "") -> list[dict]:
     """``scope`` is the analysis id: record ids are unique per analysis so the
     same repository can be analysed repeatedly without key collisions."""
-    files = {parsed.path: parsed for parsed in parsed_files}
     records: list[dict] = []
     handler_index: dict[str, list[str]] = defaultdict(list)
     for parsed in parsed_files:

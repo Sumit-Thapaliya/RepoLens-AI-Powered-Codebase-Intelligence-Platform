@@ -1,6 +1,6 @@
 """Shared contracts for RepoLens.
 
-Every other package (`parser`, `analyzer`, `graph`, `embeddings`) and the API
+Every other package (`parser`, `analyzer`, `graph`) and the API
 layer speak these types, so a change here is a change to the platform contract.
 """
 
@@ -22,14 +22,13 @@ from .constants import (
 )
 from .errors import (
     AnalysisCancelledError,
+    AnalysisNotReadyError,
     DatabaseError,
-    EmbeddingError,
     EmptyRepositoryError,
     GitHostError,
     GitHubAuthError,
     GitHubRateLimitError,
     InvalidRepoUrlError,
-    LLMError,
     ParseError,
     RepoNotFoundError,
     RepoLensError,
@@ -43,10 +42,6 @@ from .schemas import (
     ApiEndpoint,
     ArchitectureGraph,
     Branch,
-    ChatAnswer,
-    ChatCitation,
-    ChatRequest,
-    ChatTurn,
     CodeChunk,
     DependencyEdge,
     DependencyGraph,

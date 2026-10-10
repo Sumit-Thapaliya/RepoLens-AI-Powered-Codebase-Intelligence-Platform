@@ -1,14 +1,29 @@
 "use client";
 
 import * as React from "react";
-import { ApiError, cancelAnalysis as cancelRun, createAnalysis, deleteAnalysis as deleteRun, getAnalysis, listAnalyses } from "@/lib/api";
+import {
+  ApiError,
+  cancelAnalysis as cancelRun,
+  createAnalysis,
+  getAnalysis,
+  clearResponseCache,
+  heartbeatAnalysis,
+  listAnalyses,
+  prefetchAnalysis,
+  releaseAnalysis,
+} from "@/lib/api";
 import type { Analysis, RepoMetadata } from "@/lib/types";
 import { useToast } from "@/components/ui/states";
+import { getWindowId, readCurrentRun, readWindowRuns, writeCurrentRun, writeWindowRuns } from "@/lib/window";
 
-const STORAGE_KEY = "repolens.analysisId";
+/** How often this window tells the server it is still open. */
+const HEARTBEAT_MS = 20_000;
+
+type RunSummary = Analysis & { repo?: { id: string; full_name?: string; url?: string } };
 
 export interface AnalysisContextValue {
-  analyses: (Analysis & { repo?: { id: string; full_name?: string; url?: string } })[];
+  /** Runs owned by this window only. */
+  analyses: RunSummary[];
   analysis: Analysis | null;
   analysisId: string | null;
   repo: RepoMetadata | null;
@@ -35,7 +50,7 @@ export function useAnalysisContext(): AnalysisContextValue {
 
 export function AnalysisProvider({ children }: { children: React.ReactNode }) {
   const { push } = useToast();
-  const [analyses, setAnalyses] = React.useState<AnalysisContextValue["analyses"]>([]);
+  const [analyses, setAnalyses] = React.useState<RunSummary[]>([]);
   const [analysisId, setAnalysisId] = React.useState<string | null>(null);
   const [analysis, setAnalysis] = React.useState<Analysis | null>(null);
   const [repo, setRepo] = React.useState<RepoMetadata | null>(null);
@@ -43,14 +58,30 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
   const [starting, setStarting] = React.useState(false);
   const [error, setError] = React.useState<ApiError | null>(null);
 
-  const fetchRuns = React.useCallback(async () => {
+  /** Sets the shown analysis and remembers it for this window only. */
+  const commitCurrent = React.useCallback((id: string | null) => {
+    setAnalysisId(id);
+    writeCurrentRun(id);
+  }, []);
+
+  /** Loads this window's runs. Runs the server no longer has are forgotten by this window. */
+  const fetchRuns = React.useCallback(async (): Promise<RunSummary[]> => {
+    const ids = readWindowRuns();
+    if (ids.length === 0) {
+      setAnalyses([]);
+      return [];
+    }
     try {
-      const payload = await listAnalyses(25);
-      setAnalyses(payload.analyses);
-      return payload.analyses;
+      const payload = await listAnalyses(ids);
+      const found = payload.analyses;
+      const foundIds = new Set(found.map((run) => run.id));
+      const kept = ids.filter((id) => foundIds.has(id));
+      if (kept.length !== ids.length) writeWindowRuns(kept);
+      setAnalyses(found);
+      return found;
     } catch (cause) {
       if (cause instanceof ApiError) setError(cause);
-      return [] as AnalysisContextValue["analyses"];
+      return [];
     }
   }, []);
 
@@ -58,19 +89,61 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
     await fetchRuns();
   }, [fetchRuns]);
 
-  /* Bootstrap: restore the last viewed run or fall back to the newest one. */
+  /* Bootstrap: restore this window's last run. A new window starts empty. */
   React.useEffect(() => {
     let cancelled = false;
     (async () => {
-      const stored = typeof window !== "undefined" ? window.localStorage.getItem(STORAGE_KEY) : null;
       const runs = await fetchRuns();
       if (cancelled) return;
-      const candidate = (stored && runs.find((run) => run.id === stored)) || runs[0];
-      setAnalysisId(candidate ? candidate.id : null);
+      const stored = readCurrentRun();
+      if (runs.length === 0 && stored && readWindowRuns().includes(stored)) {
+        // The list request failed (for example the API is restarting). Keep the window's analysis.
+        setAnalysisId(stored);
+      } else {
+        const candidate = (stored && runs.find((run) => run.id === stored)) || runs[0];
+        commitCurrent(candidate ? candidate.id : null);
+      }
       setLoading(false);
     })();
     return () => {
       cancelled = true;
+    };
+  }, [fetchRuns, commitCurrent]);
+
+  /* Heartbeat: keeps this window's runs alive while the window is open. */
+  React.useEffect(() => {
+    let cancelled = false;
+    const ping = async () => {
+      const ids = readWindowRuns();
+      if (ids.length === 0) return;
+      const windowId = getWindowId();
+      const results = await Promise.all(
+        ids.map(async (id) => {
+          try {
+            await heartbeatAnalysis(id, windowId);
+            return { id, gone: false };
+          } catch (cause) {
+            return { id, gone: cause instanceof ApiError && cause.status === 404 };
+          }
+        }),
+      );
+      const gone = results.filter((result) => result.gone).map((result) => result.id);
+      if (gone.length === 0 || cancelled) return;
+      writeWindowRuns(readWindowRuns().filter((id) => !gone.includes(id)));
+      clearResponseCache();
+      const runs = await fetchRuns();
+      setAnalysisId((current) => {
+        if (!current || !gone.includes(current)) return current;
+        const next = runs[0]?.id ?? null;
+        writeCurrentRun(next);
+        return next;
+      });
+    };
+    void ping();
+    const timer = setInterval(() => void ping(), HEARTBEAT_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
     };
   }, [fetchRuns]);
 
@@ -94,6 +167,7 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
         if (payload.analysis.status === "queued" || payload.analysis.status === "running") {
           timer = setTimeout(load, 1500);
         } else {
+          if (payload.analysis.status === "complete") prefetchAnalysis(analysisId);
           void fetchRuns();
         }
       } catch (cause) {
@@ -124,22 +198,34 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
     lastStatus.current = analysis.status;
   }, [analysis, repo, push]);
 
-  const selectAnalysis = React.useCallback((id: string) => {
-    setAnalysisId(id);
-    setAnalysis(null);
-    if (typeof window !== "undefined") window.localStorage.setItem(STORAGE_KEY, id);
-  }, []);
+  const selectAnalysis = React.useCallback(
+    (id: string) => {
+      if (!readWindowRuns().includes(id)) return;
+      commitCurrent(id);
+      setAnalysis(null);
+    },
+    [commitCurrent],
+  );
 
   const startAnalysis = React.useCallback(
     async (url: string, branch?: string | null) => {
       setStarting(true);
       setError(null);
+      const windowId = getWindowId();
+      const previous = readWindowRuns();
       try {
-        const result = await createAnalysis(url, branch ?? null, true);
-        setAnalysisId(result.analysis_id);
+        const result = await createAnalysis(url, branch ?? null, true, windowId);
+        clearResponseCache();
+        writeWindowRuns([result.analysis_id]);
+        commitCurrent(result.analysis_id);
         setAnalysis(result.analysis);
         setRepo(result.repo);
-        if (typeof window !== "undefined") window.localStorage.setItem(STORAGE_KEY, result.analysis_id);
+        // A new URL discards this window's earlier analysis (kept only if another open window still uses it).
+        await Promise.all(
+          previous
+            .filter((id) => id !== result.analysis_id)
+            .map((id) => releaseAnalysis(id, windowId).catch(() => undefined)),
+        );
         void fetchRuns();
         push({
           tone: "info",
@@ -156,7 +242,7 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
         setStarting(false);
       }
     },
-    [push, fetchRuns],
+    [push, fetchRuns, commitCurrent],
   );
 
   const cancel = React.useCallback(async () => {
@@ -164,7 +250,6 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
     try {
       await cancelRun(analysisId);
       push({ tone: "info", title: "Analysis cancelled" });
-      setAnalysisId(analysisId);
     } catch (cause) {
       push({ tone: "error", title: "Cancel failed", detail: cause instanceof Error ? cause.message : String(cause) });
     }
@@ -173,19 +258,18 @@ export function AnalysisProvider({ children }: { children: React.ReactNode }) {
   const remove = React.useCallback(
     async (id: string) => {
       try {
-        await deleteRun(id);
-        push({ tone: "success", title: "Analysis deleted" });
+        // Release it from this window; the server deletes it unless another open window still uses it.
+        await releaseAnalysis(id, getWindowId());
+        clearResponseCache();
+        writeWindowRuns(readWindowRuns().filter((item) => item !== id));
+        push({ tone: "success", title: "Analysis removed" });
         const runs = await fetchRuns();
-        if (analysisId === id) {
-          const next = runs[0]?.id ?? null;
-          setAnalysisId(next);
-          if (next && typeof window !== "undefined") window.localStorage.setItem(STORAGE_KEY, next);
-        }
+        if (analysisId === id) commitCurrent(runs[0]?.id ?? null);
       } catch (cause) {
         push({ tone: "error", title: "Delete failed", detail: cause instanceof Error ? cause.message : String(cause) });
       }
     },
-    [analysisId, push, fetchRuns],
+    [analysisId, push, fetchRuns, commitCurrent],
   );
 
   const value: AnalysisContextValue = {

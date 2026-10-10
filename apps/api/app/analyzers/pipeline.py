@@ -9,16 +9,17 @@ and the run continues. Only the two stages that produce the source tree itself
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import posixpath
 import shutil
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from repolens_embeddings import get_embedder
 from repolens_graph import (
     analyze_quality,
     build_architecture,
@@ -47,7 +48,7 @@ from repolens_shared.constants import (
     Stage,
 )
 from repolens_shared.errors import EmptyRepositoryError, RepoLensError
-from repolens_shared.utils import language_for_path, sha1, stable_id, truncate
+from repolens_shared.utils import RUN_SCOPE, language_for_path, sha1, stable_id, truncate
 
 from ..core.config import Settings
 from ..core.db import session_scope
@@ -86,6 +87,8 @@ STAGE_ORDER = [str(stage["id"].value if hasattr(stage["id"], "value") else stage
 
 MAX_SYMBOLS = 40_000
 MAX_CHUNKS = 12_000
+# Temporary checkouts live under the OS temp dir and are deleted when a run ends.
+WORK_ROOT = Path(tempfile.gettempdir()) / "repolens-work"
 MAX_DB_CONTENT_BYTES = 96_000
 GRAPH_NODE_BUDGET = 1_600
 
@@ -125,6 +128,12 @@ class AnalysisPipeline:
     def _check_cancel(self) -> None:
         if self.cancel_event.is_set():
             raise AnalysisCancelled()
+        limit = self.settings.max_analysis_seconds
+        if limit and time.perf_counter() - self.started > limit:
+            raise RepoLensError(
+                f"Analysis stopped after the {limit}-second time limit.",
+                hint="Raise MAX_ANALYSIS_SECONDS in your .env file for very large repositories.",
+            )
 
     def _set_stage(self, stage: str, *, detail: str | None = None, fraction: float = 0.0,
                    status: str = "running", warnings: list[dict] | None = None) -> None:
@@ -190,6 +199,7 @@ class AnalysisPipeline:
 
     # ------------------------------------------------------------------- run
     async def run(self) -> dict:
+        RUN_SCOPE.set(self.analysis_id)  # ids made in this run are scoped to it
         try:
             context = await self._stage_resolve()
             await self._stage_fetch(context)
@@ -227,18 +237,19 @@ class AnalysisPipeline:
             self._cleanup_sources()
 
     def _cleanup_sources(self) -> None:
-        """Keep the checkout on success (the code explorer and re-reads use it),
-        delete it when the run failed so the cache does not fill with debris."""
+        """Always delete the temporary checkout once a run ends. Nothing is kept on disk.
+
+        The code explorer falls back to fetching files from GitHub on demand, so the checkout
+        is never needed after the run.
+        """
+        shutil.rmtree(WORK_ROOT / self.analysis_id, ignore_errors=True)
         try:
             with session_scope() as session:
                 analysis = session.get(Analysis, self.analysis_id)
-                if analysis is None or analysis.status == "complete":
-                    return
-                if analysis.source_root:
-                    shutil.rmtree(Path(analysis.source_root).parent, ignore_errors=True)
+                if analysis is not None and analysis.source_root:
                     analysis.source_root = None
         except Exception:
-            logger.debug("Source cleanup skipped for %s", self.analysis_id, exc_info=True)
+            logger.debug("Could not clear source path for %s", self.analysis_id, exc_info=True)
 
     def _finalise_progress(self) -> None:
         with session_scope() as session:
@@ -291,7 +302,7 @@ class AnalysisPipeline:
     async def _stage_fetch(self, context: PipelineContext) -> None:
         self._set_stage(Stage.FETCHING, detail="Downloading sources from GitHub", status="running")
         self._check_cancel()
-        workdir = self.settings.cache_dir / self.analysis_id
+        workdir = WORK_ROOT / self.analysis_id
         if workdir.exists():
             shutil.rmtree(workdir, ignore_errors=True)
         workdir.mkdir(parents=True, exist_ok=True)
@@ -359,7 +370,8 @@ class AnalysisPipeline:
             for start in range(0, total, chunk_size):
                 self._check_cancel()
                 batch = paths[start: start + chunk_size]
-                results = await loop.run_in_executor(pool, _parse_batch, batch)
+                ctx = contextvars.copy_context()  # the worker thread must see the run scope too
+                results = await loop.run_in_executor(pool, ctx.run, _parse_batch, batch)
                 parsed_files.extend(results)
                 for parsed in results:
                     if parsed.parse_error:
@@ -443,39 +455,18 @@ class AnalysisPipeline:
                             "workflows": len(workflows), "issues": quality["summary"]["issues"]}}
 
     async def _stage_embed(self, context: PipelineContext, artifacts: dict) -> None:
-        self._set_stage(Stage.EMBEDDING, detail="Building code chunks", status="running")
+        """Build the search index: text chunks only. No vectors are computed or stored."""
+        self._set_stage(Stage.INDEXING, detail="Building the code search index", status="running")
         self._check_cancel()
         chunks = _build_chunks(context, max_chunks=MAX_CHUNKS, scope=self.analysis_id)
-        embedder = get_embedder(
-            self.settings.embeddings_provider,
-            dim=self.settings.embedding_dim,
-            api_key=self.settings.openai_api_key,
-            model=self.settings.embeddings_model or "text-embedding-3-small",
-            base_url=self.settings.openai_base_url,
-        )
-        embeddings: list[list[float]] = []
-        texts = [chunk["text"] for chunk in chunks]
-        batch_size = 48
-        try:
-            for start in range(0, len(texts), batch_size):
-                self._check_cancel()
-                embeddings.extend(embedder.embed(texts[start: start + batch_size]))
-                fraction = min(1.0, (start + batch_size) / max(1, len(texts)))
-                self._set_stage(Stage.EMBEDDING, detail=f"Embedded {min(start + batch_size, len(texts))}/{len(texts)} chunks",
-                                fraction=fraction * 0.8)
-        except Exception as exc:
-            self._warn("embedding_failed", f"Embedding generation failed: {exc}")
-            embeddings = [[0.0] * self.settings.embedding_dim for _ in texts]
-        _store_chunks(self.analysis_id, chunks, embeddings, self.settings)
+        _store_chunks(self.analysis_id, chunks)
         with session_scope() as session:
             analysis = session.get(Analysis, self.analysis_id)
             if analysis:
-                analysis.provider_info = {
-                    **(analysis.provider_info or {}),
-                    "embeddings": embedder.describe() if hasattr(embedder, "describe") else {"provider": "unknown"},
-                    "chunks": len(chunks),
-                }
-        self._set_stage(Stage.EMBEDDING, detail=f"{len(chunks)} chunks embedded and indexed", status="done", fraction=1.0)
+                analysis.provider_info = {**(analysis.provider_info or {}),
+                                          "search": {"ranking": "lexical", "chunks": len(chunks)}}
+        self._set_stage(Stage.INDEXING, detail=f"{len(chunks)} chunks indexed for search", status="done",
+                        fraction=1.0)
 
     # ----------------------------------------------------------- artefacts
     def _build_overview(self, context: PipelineContext, graph, endpoints, database, workflows, quality,
@@ -722,7 +713,7 @@ class AnalysisPipeline:
                 document = generate_docs(
                     doc_kind, overview=overview, architecture=architecture, endpoints=endpoints, database=database,
                     workflows=workflows, frameworks=context.stats.get("frameworks", []), graph_stats=graph.stats,
-                    quality=quality, llm=None,
+                    quality=quality,
                 )
                 docs[doc_kind] = document
                 session.add(AnalysisArtifact(id=stable_id("doc", self.analysis_id, doc_kind),
@@ -820,32 +811,18 @@ def _build_chunks(context: PipelineContext, max_chunks: int, scope: str = "") ->
     return chunks[:max_chunks]
 
 
-def _store_chunks(analysis_id: str, chunks: list[dict], embeddings: list[list[float]], settings: Settings) -> None:
-    from repolens_embeddings import pack_vector
-    from ..core.db import database_state
-    pgvector = bool(database_state().get("pgvector"))
+def _store_chunks(analysis_id: str, chunks: list[dict]) -> None:
+    """Persist the lexical search chunks for one analysis (text only, no vectors)."""
     with session_scope() as session:
         session.query(ChunkRecord).filter(ChunkRecord.analysis_id == analysis_id).delete(synchronize_session=False)
-        rows = []
-        for chunk, vector in zip(chunks, embeddings):
-            rows.append(ChunkRecord(
-                id=chunk["id"], analysis_id=analysis_id, path=chunk["path"], symbol=chunk.get("symbol"),
-                kind=chunk["kind"], start_line=chunk["start_line"], end_line=chunk["end_line"],
-                text=chunk["text"], tokens=chunk["tokens"],
-                embedding=None if pgvector else pack_vector(vector),
-            ))
-        for start in range(0, len(rows), 1000):
-            session.bulk_save_objects(rows[start: start + 1000])
+        rows = [ChunkRecord(
+            id=chunk["id"], analysis_id=analysis_id, path=chunk["path"], symbol=chunk.get("symbol"),
+            kind=chunk["kind"], start_line=chunk["start_line"], end_line=chunk["end_line"],
+            text=chunk["text"], tokens=chunk["tokens"],
+        ) for chunk in chunks]
+        for start_index in range(0, len(rows), 1000):
+            session.bulk_save_objects(rows[start_index: start_index + 1000])
             session.flush()
-        if pgvector and rows:
-            from sqlalchemy import text as sql_text
-            payload = [{"id": chunk["id"], "v": "[" + ",".join(f"{value:.6f}" for value in vector) + "]"}
-                       for chunk, vector in zip(chunks, embeddings)]
-            for start in range(0, len(payload), 500):
-                session.execute(
-                    sql_text("UPDATE chunks SET embedding = CAST(:v AS vector) WHERE id = :id"),
-                    payload[start: start + 500],
-                )
 
 
 def _file_summary(parsed) -> str:

@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import posixpath
 from collections import defaultdict, deque
 
 from repolens_shared.utils import truncate
 from repolens_parser import ParsedFile
 from repolens_parser.python_analyzer import is_test_path
 
-from .dependency import GraphResult, imported_symbol_map
+from .dependency import GraphResult
 from .workflows import WorkflowTracer, _trace_endpoint
 
 

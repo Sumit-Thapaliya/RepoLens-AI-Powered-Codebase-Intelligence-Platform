@@ -431,48 +431,17 @@ export interface SearchHit {
   snippet: string;
 }
 
-export interface ChatCitation {
+export interface ImpactFile {
   path: string;
-  line?: number | null;
-  symbol?: string | null;
-  reason?: string | null;
-  score?: number | null;
-}
-
-export interface ChatImpact {
-  target: string;
-  summary: string[];
-  direct_dependencies: string[];
-  dependents: string[];
-  indirect_dependents: string[];
-  affected_endpoints: { method?: string | null; path?: string | null; file_path?: string | null; line?: number | null }[];
-  affected_workflows: { name?: string | null; category?: string | null; impacted_steps: { label?: string; file_path?: string | null; kind?: string }[] }[];
-  related_tests: string[];
-  risks: { level: string; title: string; detail: string; heuristic: boolean }[];
-  notes: string[];
-}
-
-export interface ChatAnswer {
-  answer: string;
-  impact?: ChatImpact | null;
-  citations: ChatCitation[];
-  retrieval: SearchHit[];
-  trace: {
-    root?: { name?: string; path?: string; line?: number | null; trigger?: string | null };
-    steps: WorkflowStep[];
-    truncated: boolean;
-    evidence: string[];
-    files: string[];
-    confidence?: number;
-  } | null;
-  model: string;
-  grounded: boolean;
-  llm_configured: boolean;
-  followups: string[];
-  latency_ms?: number | null;
-  notes: string[];
-  intent?: string;
-  evidence_count?: number;
+  layer?: string;
+  loc?: number;
+  symbols?: number;
+  files?: number;
+  fan_in?: number;
+  fan_out?: number;
+  coupling?: number;
+  kind?: string;
+  is_test?: boolean;
 }
 
 export interface ImpactReport {
@@ -490,23 +459,9 @@ export interface ImpactReport {
   error?: string;
 }
 
-export interface ImpactFile {
-  path: string;
-  layer?: string;
-  loc?: number;
-  symbols?: number;
-  files?: number;
-  fan_in?: number;
-  fan_out?: number;
-  coupling?: number;
-  kind?: string;
-  is_test?: boolean;
-}
-
 export interface Capabilities {
-  llm: { provider: string; model?: string | null; configured: boolean; mode: string; note: string };
-  embeddings: { provider: string; model?: string | null; dim: number; neural: boolean; note: string };
-  database: { dialect: string; pgvector: boolean; search_backend: string; location: string; note: string };
+  storage: { mode: "memory" | "postgres"; dialect: string; local_files: boolean; note: string; max_stored_runs: number };
+  search: { ranking: string; note: string };
   github: { authenticated: boolean; rate_limit: string; note: string };
   limits: Record<string, number>;
 }

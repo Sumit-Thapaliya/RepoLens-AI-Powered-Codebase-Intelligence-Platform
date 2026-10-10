@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { BrainCircuit, Check, Copy, Loader2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Search, ShieldAlert } from "lucide-react";
+import { Check, Copy, Loader2, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Search, ShieldAlert } from "lucide-react";
 import dynamic from "next/dynamic";
 import { RunGate } from "@/components/app/run-gate";
 
@@ -247,7 +247,7 @@ function ExplorerBody() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysisId, pathParam, lineParam, openFile]);
 
-  /* Follow in-app navigation (e.g. from the dependency graph or the AI chat). */
+  /* Follow in-app navigation (e.g. from the dependency graph or the impact view). */
   React.useEffect(() => {
     if (pathParam && pathParam !== selectedPath) void openFile(pathParam, lineParam);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -298,9 +298,6 @@ function ExplorerBody() {
               </Button>
               <Button size="xs" variant="outline" onClick={() => router.push(`/impact?path=${encodeURIComponent(file.path)}`)}>
                 <ShieldAlert /> Impact
-              </Button>
-              <Button size="xs" variant="outline" onClick={() => router.push(`/chat?path=${encodeURIComponent(file.path)}`)}>
-                <BrainCircuit /> Ask about this file
               </Button>
               {focusSymbol ? (
                 <>

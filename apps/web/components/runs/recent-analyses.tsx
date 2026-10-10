@@ -45,7 +45,7 @@ export function RecentAnalyses() {
             {analyses.length === 0 ? (
               <tr>
                 <td colSpan={8} className="px-5 py-8 text-center text-muted-foreground">
-                  No analyses stored yet.
+                  Nothing analysed in this window yet.
                 </td>
               </tr>
             ) : (
@@ -102,8 +102,7 @@ export function RecentAnalyses() {
       </div>
       <p className="flex items-center gap-2 border-t border-border px-5 py-2.5 text-2xs text-muted-foreground">
         <RotateCcw className="size-3" />
-        Re-analysing the same repository creates a new run; the previous 8 runs per repository are kept and can be
-        switched at any time from the run menu in the header.
+        Re-analysing the same repository replaces the previous result once the new run completes.
       </p>
     </section>
   );

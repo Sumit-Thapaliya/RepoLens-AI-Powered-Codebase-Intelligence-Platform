@@ -93,9 +93,73 @@ def _find_config(files: dict[str, str], name: str) -> str | None:
 
 
 def _strip_json_comments(text: str) -> str:
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
-    text = re.sub(r"(^|\s)//.*$", "", text, flags=re.MULTILINE)
-    return re.sub(r",\s*([}\]])", r"\1", text)
+    """Make a tsconfig/jsconfig parseable as JSON: drop comments, then trailing commas.
+
+    Both passes ignore anything inside string literals. A regex-based version broke on aliases such
+    as ``"@/*"``, where ``/*`` looked like the start of a block comment.
+    """
+    return _drop_trailing_commas(_drop_comments(text))
+
+
+def _drop_comments(text: str) -> str:
+    out: list[str] = []
+    i, n = 0, len(text)
+    in_string = False
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "/" and i + 1 < n and text[i + 1] == "/":
+            end = text.find("\n", i)
+            i = n if end == -1 else end
+            continue
+        elif ch == "/" and i + 1 < n and text[i + 1] == "*":
+            end = text.find("*/", i + 2)
+            i = n if end == -1 else end + 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _drop_trailing_commas(text: str) -> str:
+    out: list[str] = []
+    i, n = 0, len(text)
+    in_string = False
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == ",":
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j < n and text[j] in "}]":
+                i += 1
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 # --------------------------------------------------------------------------- #

@@ -31,7 +31,6 @@ PLACEHOLDER_SECRETS = {"changeme", "your-key-here", "xxx", "todo", "placeholder"
 def analyze_quality(parsed_files: list[ParsedFile], graph: GraphResult, file_contents: dict[str, str] | None = None,
                     max_findings: int = 200, scope: str = "") -> dict:
     issues: list[dict] = []
-    files = {parsed.path: parsed for parsed in parsed_files}
     thresholds = QUALITY_THRESHOLDS
 
     def add(kind: str, severity: str, title: str, detail: str, *, files: list[str] | None = None,

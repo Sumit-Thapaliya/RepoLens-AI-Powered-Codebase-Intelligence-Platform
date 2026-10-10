@@ -10,12 +10,11 @@ from __future__ import annotations
 
 import posixpath
 import re
-from collections import defaultdict
 
 from repolens_shared.constants import WORKFLOW_SIGNALS
 from repolens_shared.utils import is_doc_path, is_example_path, stable_id, truncate
 from repolens_parser import ParsedFile
-from repolens_parser.python_analyzer import is_test_path, layer_for_path
+from repolens_parser.python_analyzer import is_test_path
 
 from .dependency import GraphResult, build_symbol_index, imported_symbol_map
 
@@ -228,7 +227,7 @@ def detect_workflows(parsed_files: list[ParsedFile], graph: GraphResult, source_
         return (0 if category in {"auth", "payment", "signup"} else 1, record.get("path", ""))
 
     for record in sorted(endpoint_records, key=interest)[:60]:
-        workflow = _trace_endpoint(tracer, record, scope=scope)
+        workflow = _trace_endpoint(tracer, record)
         if workflow is None:
             continue
         key = f"{workflow['trigger']}::{workflow.get('entry_point')}"
@@ -415,7 +414,6 @@ def _detect_background_workflows(tracer: WorkflowTracer, parsed_files: list[Pars
                                  seen_keys: set[str], scope: str = "") -> list[dict]:
     """Celery tasks, cron jobs, websocket consumers and CLI entrypoints."""
     workflows: list[dict] = []
-    task_pattern = re.compile(r"@(app|celery|shared_task|task)[\w.]*\.?(task|periodic_task)?\s*[\(\n]", re.IGNORECASE)
     for parsed in parsed_files:
         if parsed.parse_error:
             continue
@@ -458,7 +456,7 @@ def _detect_background_workflows(tracer: WorkflowTracer, parsed_files: list[Pars
 
 
 def trace_symbol(tracer: WorkflowTracer, path: str, symbol_name: str) -> dict | None:
-    """Trace a single symbol outward - used by the AI chat for 'how does X work'."""
+    """Trace a single symbol outward - used for 'how does X work'."""
     symbol = tracer.symbol_in_file(path, symbol_name)
     if symbol is None:
         return None
@@ -477,7 +475,7 @@ def find_entrypoints_for(tracer: WorkflowTracer, path: str, symbol_name: str, li
                               "auth_required": route.auth_hint})
     hits = []
     for record in endpoints[:80]:
-        workflow = _trace_endpoint(tracer, record, scope=scope)
+        workflow = _trace_endpoint(tracer, record)
         if not workflow:
             continue
         for step in workflow["steps"]:

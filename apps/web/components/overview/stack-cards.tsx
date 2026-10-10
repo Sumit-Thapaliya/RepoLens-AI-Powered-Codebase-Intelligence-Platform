@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Boxes, Database as DatabaseIcon, FileWarning, Package, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { DonutChart } from "@/components/charts/donut-chart";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Overview } from "@/lib/types";
 import { getLanguages } from "@/lib/api";
@@ -90,7 +91,21 @@ export function LanguageCard({ overview }: { overview: Overview }) {
             </Tooltip>
           ))}
         </div>
-        <ul className="mt-4 grid gap-x-6 gap-y-2 sm:grid-cols-2">
+        <div className="mt-4 flex flex-wrap items-start gap-6">
+          <DonutChart
+            size={120}
+            thickness={14}
+            showLegend={false}
+            centerValue={languages.length}
+            centerLabel="languages"
+            ariaLabel="Share of files by language"
+            segments={languages.map((entry) => ({
+              label: entry.label,
+              value: entry.files,
+              color: LANGUAGE_COLORS[entry.language] ?? "#6b7280",
+            }))}
+          />
+        <ul className="grid min-w-[16rem] flex-1 gap-x-6 gap-y-2 sm:grid-cols-2">
           {languages.map((entry) => (
             <li key={entry.language} className="flex items-center justify-between gap-3 text-xs">
               <span className="flex min-w-0 items-center gap-2">
@@ -106,6 +121,7 @@ export function LanguageCard({ overview }: { overview: Overview }) {
           ))}
           {languages.length === 0 ? <li className="text-xs text-muted-foreground">No parsable source files found.</li> : null}
         </ul>
+        </div>
       </div>
     </section>
   );

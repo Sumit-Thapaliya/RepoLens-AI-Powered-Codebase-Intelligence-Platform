@@ -123,13 +123,13 @@ export function RunGate({ children, title = "Select or start an analysis" }: { c
               <p className="mt-1.5 text-xs text-muted-foreground">{activeRun.message || "Fetching repository metadata from GitHub…"}</p>
             </div>
             <div className="text-right">
-              <p className="kpi-value">{activeRun.progress}%</p>
+              <p className="kpi-value">{Math.round((activeRun.progress ?? 0) * 100)}%</p>
               <p className="kpi-label">progress</p>
             </div>
           </div>
 
           <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-secondary">
-            <div className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-all duration-700" style={{ width: `${activeRun.progress}%` }} />
+            <div className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-all duration-700" style={{ width: `${Math.round((activeRun.progress ?? 0) * 100)}%` }} />
           </div>
 
           <div className="mt-6">

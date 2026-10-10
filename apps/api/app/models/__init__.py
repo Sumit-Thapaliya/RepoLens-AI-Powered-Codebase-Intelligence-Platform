@@ -5,7 +5,6 @@ from .tables import (  # noqa: F401
     AnalysisArtifact,
     ApiEndpointRecord,
     Base,
-    ChatMessageRecord,
     ChunkRecord,
     CycleRecord,
     DbModelRecord,

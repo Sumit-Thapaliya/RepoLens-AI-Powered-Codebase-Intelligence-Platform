@@ -2,12 +2,11 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Activity,
   Blocks,
   Boxes,
-  BrainCircuit,
   Database,
   FileCode2,
   Gauge,
@@ -20,6 +19,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
+import { useNavigation } from "@/components/providers/navigation-provider";
 
 const NAV = [
   { section: "Repository", items: [
@@ -37,13 +37,21 @@ const NAV = [
     { href: "/search", label: "Search", icon: Sparkles },
     { href: "/quality", label: "Quality", icon: Gauge },
     { href: "/impact", label: "Impact Analysis", icon: ShieldAlert },
-    { href: "/chat", label: "AI Chat", icon: BrainCircuit },
   ]},
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const { analysis, repo, complete } = useAnalysisContext();
+  const { pendingHref, startNavigation } = useNavigation();
+  const currentHref = pendingHref ?? pathname;
+
+  // Compile/fetch every sidebar page ahead of time so the first click is quick.
+  React.useEffect(() => {
+    for (const group of NAV) for (const item of group.items) router.prefetch(item.href);
+    router.prefetch("/docs");
+  }, [router]);
 
   return (
     <aside className="sticky top-0 hidden h-svh w-60 shrink-0 flex-col border-r border-border bg-surface/60 backdrop-blur-sm lg:flex">
@@ -82,7 +90,7 @@ export function Sidebar() {
             </p>
             <ul className="space-y-0.5">
               {group.items.map((item) => {
-                const active = pathname === item.href;
+                const active = currentHref === item.href;
                 const disabled = !complete && item.href !== "/";
                 const Icon = item.icon;
                 return (
@@ -90,8 +98,13 @@ export function Sidebar() {
                     <Link
                       href={disabled ? "#" : item.href}
                       aria-disabled={disabled}
+                      aria-current={active ? "page" : undefined}
                       onClick={(event) => {
-                        if (disabled) event.preventDefault();
+                        if (disabled) {
+                          event.preventDefault();
+                          return;
+                        }
+                        startNavigation(item.href);
                       }}
                       className={cn(
                         "group flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[0.8125rem] transition-colors",
@@ -118,8 +131,9 @@ export function Sidebar() {
           href="/docs"
           className={cn(
             "flex items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors",
-            pathname === "/docs" ? "text-primary" : "text-muted-foreground hover:text-foreground",
+            currentHref === "/docs" ? "text-primary" : "text-muted-foreground hover:text-foreground",
           )}
+          onClick={() => startNavigation("/docs")}
         >
           <Settings2 className="size-3.5" /> Generated docs & export
         </Link>

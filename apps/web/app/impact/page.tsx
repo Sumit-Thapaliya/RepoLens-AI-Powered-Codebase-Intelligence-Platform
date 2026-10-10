@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeftRight, ArrowRight, FlaskConical, GitBranch, ShieldAlert, Sparkles, Workflow as WorkflowIcon } from "lucide-react";
+import { ArrowLeftRight, ArrowRight, FlaskConical, GitBranch, ShieldAlert, Workflow as WorkflowIcon } from "lucide-react";
 import { RunGate } from "@/components/app/run-gate";
 import { PathLink } from "@/components/common/path-link";
 import { Badge } from "@/components/ui/badge";
@@ -220,9 +220,6 @@ function ImpactBody() {
               <div className="flex items-center gap-2">
                 <Button size="xs" variant="outline" onClick={() => openFile(report.target.path)}>
                   Open in explorer
-                </Button>
-                <Button size="xs" variant="outline" onClick={() => router.push(`/chat?path=${encodeURIComponent(report.target.path)}`)}>
-                  <Sparkles className="size-3" /> Ask about this file
                 </Button>
               </div>
             </div>

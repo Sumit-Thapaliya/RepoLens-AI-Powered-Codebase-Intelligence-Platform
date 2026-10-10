@@ -1,84 +1,36 @@
 # ---------------------------------------------------------------------------
-# RepoLens - production-style stack (canonical file: infrastructure/docker-compose.yml)
+# RepoLens - two services, no database volume.
 #
 #   docker compose up --build        # http://localhost:3000
 #
 # Services:
-#   db      Postgres 16 + pgvector (persistent volume, health-checked)
-#   api     FastAPI analysis engine (runs migrations implicitly on boot)
-#   web     Next.js UI, proxies /backend/* to the API internally
-#   migrate one-shot job that applies infrastructure/migrations to the database
+#   api   FastAPI analysis engine. Results are kept in memory (or in the
+#         Postgres database named by DATABASE_URL, e.g. Neon when set).
+#   web   Next.js UI, proxies /backend/* to the API internally.
 #
-# Every secret is read from the environment (see ../.env.example); nothing is
-# baked into the images.
+# Secrets are read from the environment (see ../.env.example); nothing is
+# baked into the images. Keep api at one worker: results live in that process.
 # ---------------------------------------------------------------------------
 name: repolens
 
 services:
-  db:
-    image: pgvector/pgvector:pg16
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-repolens}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-repolens}
-      POSTGRES_DB: ${POSTGRES_DB:-repolens}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - repolens-pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-repolens} -d ${POSTGRES_DB:-repolens}"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-
-  migrate:
-    build:
-      context: .
-      dockerfile: infrastructure/docker/api.Dockerfile
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-repolens}:${POSTGRES_PASSWORD:-repolens}@db:5432/${POSTGRES_DB:-repolens}
-    command: ["python", "-m", "app.migrations"]
-    restart: "no"
-
   api:
     build:
       context: .
       dockerfile: infrastructure/docker/api.Dockerfile
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
     environment:
       APP_ENV: ${APP_ENV:-production}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-repolens}:${POSTGRES_PASSWORD:-repolens}@db:5432/${POSTGRES_DB:-repolens}
-      ENABLE_PGVECTOR: ${ENABLE_PGVECTOR:-true}
-      EMBEDDING_DIM: ${EMBEDDING_DIM:-1536}
+      DATABASE_URL: ${DATABASE_URL:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-      LLM_PROVIDER: ${LLM_PROVIDER:-none}
-      LLM_MODEL: ${LLM_MODEL:-}
-      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048}
-      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.1}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      EMBEDDINGS_PROVIDER: ${EMBEDDINGS_PROVIDER:-local}
-      EMBEDDINGS_MODEL: ${EMBEDDINGS_MODEL:-text-embedding-3-small}
       MAX_FILES: ${MAX_FILES:-4000}
       MAX_FILE_BYTES: ${MAX_FILE_BYTES:-1048576}
-      MAX_REPO_BYTES: ${MAX_REPO_BYTES:-268435456}
+      MAX_REPO_BYTES: ${MAX_REPO_BYTES:-0}
       MAX_ANALYSIS_SECONDS: ${MAX_ANALYSIS_SECONDS:-1800}
       ANALYSIS_WORKERS: ${ANALYSIS_WORKERS:-2}
-      REPOLENS_DATA_DIR: /data
+      MAX_STORED_RUNS: ${MAX_STORED_RUNS:-8}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
-    volumes:
-      - repolens-data:/data
     ports:
       - "${API_PORT:-8000}:8000"
     healthcheck:
@@ -104,7 +56,3 @@ services:
       NODE_ENV: production
     ports:
       - "${WEB_PORT:-3000}:3000"
-
-volumes:
-  repolens-pgdata:
-  repolens-data:

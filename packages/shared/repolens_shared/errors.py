@@ -92,17 +92,14 @@ class DatabaseError(RepoLensError):
     http_status = 503
 
 
-class EmbeddingError(RepoLensError):
-    code = "embedding_error"
-    http_status = 502
-
-
-# ------------------------------------------------------------------------- AI
-class LLMError(RepoLensError):
-    code = "llm_error"
-    http_status = 502
-
 
 class AnalysisCancelledError(RepoLensError):
     code = "analysis_cancelled"
+    http_status = 409
+
+
+class AnalysisNotReadyError(RepoLensError):
+    """The analysis exists but has not finished yet. Not a server fault, so it is 409, not 500."""
+
+    code = "analysis_not_ready"
     http_status = 409

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
-from repolens_shared.errors import RepoLensError
+from repolens_shared.errors import InvalidRepoUrlError
 from repolens_shared.utils import normalize_repo_url
 
 from ..core.config import get_settings
@@ -14,7 +14,7 @@ from ..models.tables import Analysis
 from ..services.github import GitHubClient
 from ..services.store import find_repo_by_full_name, get_repo, latest_analysis, list_repos, repo_payload
 from ..services.analysis import get_manager
-from .deps import AnalyzeRequest, DbSession, ResolveRequest
+from .deps import AnalyzeRequest, ResolveRequest
 from sqlalchemy import select
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ async def resolve_repository(payload: ResolveRequest) -> dict:
     try:
         owner, name, canonical = normalize_repo_url(payload.url)
     except ValueError as exc:
-        raise RepoLensError(str(exc), hint="Paste a public repository URL such as https://github.com/owner/repo") from exc
+        raise InvalidRepoUrlError(str(exc), hint="Paste a public repository URL such as https://github.com/owner/repo") from exc
     async with GitHubClient(settings) as client:
         metadata = await client.get_repo(owner, name)
         branches = await client.get_branches(owner, name)
@@ -42,25 +42,12 @@ async def resolve_repository(payload: ResolveRequest) -> dict:
     }
 
 
-@router.get("")
-def list_imported(limit: int = 20) -> dict:
-    from ..core.db import session_scope
-    with session_scope() as session:
-        return {"repos": list_repos(session, limit=limit)}
-
-
 @router.get("/{repo_id}")
-def get_repository(repo_id: str, include_analyses: bool = False) -> dict:
+def get_repository(repo_id: str) -> dict:
+    """Repository metadata only. Analyses belong to windows, so they are not listed here."""
     from ..core.db import session_scope
     with session_scope() as session:
-        repo = get_repo(session, repo_id)
-        payload = {"repo": repo_payload(repo),
-                   "last_analysis": (lambda a: None if a is None else _analysis_summary(a))(latest_analysis(session, repo_id))}
-        if include_analyses:
-            rows = session.execute(select(Analysis).where(Analysis.repo_id == repo_id)
-                                   .order_by(Analysis.created_at.desc()).limit(20)).scalars().all()
-            payload["analyses"] = [_analysis_summary(row) for row in rows]
-        return payload
+        return {"repo": repo_payload(get_repo(session, repo_id))}
 
 
 @router.post("/{repo_id}/analyse")

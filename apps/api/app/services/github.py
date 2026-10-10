@@ -9,11 +9,12 @@ never blocks an analysis:
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import asyncio
 import logging
 import os
 import shutil
-import subprocess
 import tarfile
 import time
 from datetime import datetime
@@ -128,7 +129,7 @@ class GitHubClient:
         return (response.json() or {}).get("sha")
 
     async def get_file(self, owner: str, name: str, path: str, ref: str) -> str | None:
-        response = await self.client.get(f"/repos/{owner}/{name}/contents/{path}", params={"ref": ref})
+        response = await self.client.get(f"/repos/{owner}/{name}/contents/{quote(path, safe='/')}", params={"ref": ref})
         if response.status_code == 404:
             return None
         self._raise_for_status(response, f"{owner}/{name}/contents/{path}")
@@ -172,7 +173,7 @@ class GitHubClient:
             with open(archive, "wb") as handle:
                 async for chunk in response.aiter_bytes(1 << 16):
                     size += len(chunk)
-                    if size > max_bytes:
+                    if max_bytes and size > max_bytes:
                         handle.close()
                         archive.unlink(missing_ok=True)
                         raise RepoTooLargeError(
@@ -332,3 +333,15 @@ def clone_dir_size(path: Path) -> int:
 
 def elapsed_ms(started: float) -> int:
     return int((time.perf_counter() - started) * 1000)
+
+
+def fetch_file_on_demand(settings: Settings, owner: str, name: str, path: str, ref: str) -> str | None:
+    """Fetch one file from GitHub for the code explorer (no checkout kept on disk).
+
+    Returns None when GitHub has no text content for the path. Raises RepoLensError on API errors.
+    """
+    async def _fetch() -> str | None:
+        async with GitHubClient(settings) as client:
+            return await client.get_file(owner, name, path, ref)
+
+    return asyncio.run(_fetch())

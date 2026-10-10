@@ -392,40 +392,6 @@ class RepoSummary(Base):
     last_analysis: AnalysisRun | None = None
 
 
-# ------------------------------------------------------------------------ chat
-class ChatTurn(Base):
-    role: Literal["user", "assistant"]
-    content: str
-
-
-class ChatRequest(Base):
-    question: str
-    history: list[ChatTurn] = Field(default_factory=list)
-    focus_path: str | None = None
-
-
-class ChatCitation(Base):
-    path: str
-    line: int | None = None
-    symbol: str | None = None
-    reason: str | None = None
-    score: float | None = None
-
-
-class ChatAnswer(Base):
-    answer: str
-    citations: list[ChatCitation] = Field(default_factory=list)
-    retrieval: list[SearchHit] = Field(default_factory=list)
-    trace: Workflow | None = None
-    model: str = "retrieval-only"
-    grounded: bool = True
-    llm_configured: bool = False
-    followups: list[str] = Field(default_factory=list)
-    latency_ms: int | None = None
-    notes: list[str] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------- search
 class SearchHit(Base):
     id: str
     path: str
@@ -450,7 +416,6 @@ class ImpactReport(Base):
     notes: list[str] = Field(default_factory=list)
 
 
-# ------------------------------------------------------------------ documents
 class GeneratedDoc(Base):
     kind: str
     title: str
@@ -459,9 +424,8 @@ class GeneratedDoc(Base):
 
 
 class SystemCapabilities(Base):
-    llm: dict = Field(default_factory=dict)
-    embeddings: dict = Field(default_factory=dict)
-    database: dict = Field(default_factory=dict)
+    storage: dict = Field(default_factory=dict)
+    search: dict = Field(default_factory=dict)
     github: dict = Field(default_factory=dict)
     limits: dict = Field(default_factory=dict)
 
@@ -469,10 +433,6 @@ class SystemCapabilities(Base):
 class ErrorEnvelope(Base):
     error: dict
     request_id: str | None = None
-
-
-# ChatAnswer references SearchHit above; resolve forward refs.
-ChatAnswer.model_rebuild()
 
 
 class ApiMessage(Base):

@@ -6,6 +6,8 @@ import { RunGate } from "@/components/app/run-gate";
 import { StatCard } from "@/components/common/kpi";
 import { PathLink } from "@/components/common/path-link";
 import { Badge } from "@/components/ui/badge";
+import { DonutChart } from "@/components/charts/donut-chart";
+import { BarList } from "@/components/charts/bar-list";
 import { Input } from "@/components/ui/input";
 import { ErrorState, InlineNote, SkeletonCard } from "@/components/ui/states";
 import { ApiError, getQuality } from "@/lib/api";
@@ -169,13 +171,20 @@ function QualityBody() {
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <section className="panel p-5">
           <HealthDial score={payload.summary.health_score} label={payload.summary.health_label} />
-          <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-            {(["high", "medium", "low", "info"] as const).map((level) => (
-              <div key={level} className="rounded-lg border border-border bg-surface-muted/40 px-3 py-2">
-                <p className="text-2xs uppercase tracking-wider text-muted-foreground">{level}</p>
-                <p className="text-lg font-semibold tabular-nums">{bySeverity[level] ?? 0}</p>
-              </div>
-            ))}
+          <div className="mt-5">
+            <DonutChart
+              size={112}
+              thickness={14}
+              centerValue={payload.summary.issues}
+              centerLabel="findings"
+              ariaLabel="Findings by severity"
+              segments={[
+                { label: "High", value: bySeverity.high ?? 0, color: "#fb7185" },
+                { label: "Medium", value: bySeverity.medium ?? 0, color: "#fbbf24" },
+                { label: "Low", value: bySeverity.low ?? 0, color: "#38bdf8" },
+                { label: "Info", value: bySeverity.info ?? 0, color: "#94a3b8" },
+              ]}
+            />
           </div>
         </section>
 
@@ -186,6 +195,19 @@ function QualityBody() {
           <StatCard label="Cycles" value={Number(metrics.cycles ?? 0)} hint={`${metrics.orphans ?? 0} isolated modules`} icon={Gauge} />
         </div>
       </div>
+
+      <section className="panel p-5">
+        <div className="mb-4 flex items-baseline justify-between gap-3">
+          <h2 className="panel-title">Findings by type</h2>
+          <span className="text-2xs text-muted-foreground">count per finding type</span>
+        </div>
+        <BarList
+          items={Object.entries(payload.summary.by_kind)
+            .map(([name, count]) => ({ label: KIND_LABELS[name] ?? name, value: count, hint: name }))
+            .sort((a, b) => b.value - a.value)}
+          emptyText="No findings of any type."
+        />
+      </section>
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative">

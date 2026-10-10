@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 import posixpath
 from pathlib import Path
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from repolens_shared.errors import RepoLensError
+from repolens_shared.errors import AnalysisNotReadyError, RepoLensError
 
 from ..models.tables import (
     Analysis,
@@ -87,7 +89,7 @@ def latest_complete_analysis(session: Session, repo_id: str) -> Analysis | None:
 def require_complete(session: Session, analysis_id: str) -> Analysis:
     analysis = get_analysis(session, analysis_id)
     if analysis.status not in {"complete"}:
-        raise RepoLensError(
+        raise AnalysisNotReadyError(
             f"Analysis is not complete yet (status: {analysis.status}).",
             hint="Wait for the run to finish, or check the progress endpoint.",
         )
@@ -415,7 +417,12 @@ def file_tree(session: Session, analysis_id: str, limit: int = 6000) -> dict:
 
 
 def get_file(session: Session, analysis_id: str, path: str, source_root: str | None = None,
-             max_bytes: int = 400_000) -> dict:
+             max_bytes: int = 400_000, fetch_remote: Callable[[str], str | None] | None = None) -> dict:
+    """Return one file for the code explorer.
+
+    Order: content stored with the analysis, then the checkout if it still exists, then an
+    on-demand fetch from GitHub (``fetch_remote``). Nothing is kept on disk between requests.
+    """
     require_complete(session, analysis_id)
     row = session.execute(select(FileRecord).where(FileRecord.analysis_id == analysis_id,
                                                   FileRecord.path == path)).scalars().first()
@@ -423,15 +430,28 @@ def get_file(session: Session, analysis_id: str, path: str, source_root: str | N
         raise NotFoundError(f"`{path}` is not part of this analysis.",
                             hint="Pick a file from the explorer tree.")
     content = row.content
+    source_note: str | None = None
+    if content is not None:
+        source_note = "Content stored with this analysis."
     truncated = False
     if content is None:
         content = _read_from_disk(source_root, path)
-        if content is not None and len(content.encode("utf-8")) > max_bytes:
-            truncated = True
-            content = content[:max_bytes]
+        if content is not None:
+            source_note = "Content read from the temporary checkout."
+    if content is None and fetch_remote is not None:
+        try:
+            content = fetch_remote(path)
+            if content is not None:
+                source_note = "Fetched from GitHub on demand at the analysed commit."
+            else:
+                source_note = "GitHub has no text content for this file (it may be binary or too large)."
+        except RepoLensError as exc:
+            content = None
+            source_note = f"Could not fetch this file from GitHub: {exc.message}"
     if content is None:
         content = ""
         truncated = True
+        source_note = source_note or "Source unavailable for this file."
     elif len(content.encode("utf-8")) > max_bytes:
         truncated = True
         content = content[:max_bytes]
@@ -455,9 +475,7 @@ def get_file(session: Session, analysis_id: str, path: str, source_root: str | N
                     for edge in imports],
         "dependents": [{"path": edge.source, "kind": edge.kind, "symbols": edge.symbols or [], "line": edge.line}
                        for edge in dependents],
-        "artifact_note": "Content served from the analysis archive." if row.content else
-                         ("Content re-read from the cached checkout." if content else
-                          "Source unavailable - the checkout was cleaned up. Re-run the analysis to restore it."),
+        "artifact_note": source_note,
     }
 
 
@@ -555,3 +573,30 @@ def store_document(session: Session, analysis_id: str, payload: dict) -> None:
 def chunk_count(session: Session, analysis_id: str) -> int:
     return session.execute(select(func.count()).select_from(ChunkRecord)
                            .where(ChunkRecord.analysis_id == analysis_id)).scalar() or 0
+
+
+def delete_analysis_rows(session: Session, analysis_id: str) -> None:
+    """Remove a run and every row that belongs to it.
+
+    Child tables only hold an ``analysis_id`` column (no foreign key), so each table is cleared
+    explicitly. The repository row is removed too once no other run refers to it.
+    """
+    from sqlalchemy import delete as sa_delete
+
+    from ..models.tables import Base, Repo
+
+    row = session.get(Analysis, analysis_id)
+    repo_id = row.repo_id if row is not None else None
+    for table in Base.metadata.sorted_tables:
+        if table.name == Analysis.__tablename__ or "analysis_id" not in table.c:
+            continue
+        session.execute(sa_delete(table).where(table.c.analysis_id == analysis_id))
+    if row is not None:
+        session.delete(row)
+        session.flush()
+    if repo_id is not None:
+        still_used = session.execute(select(Analysis.id).where(Analysis.repo_id == repo_id).limit(1)).first()
+        if still_used is None:
+            repo = session.get(Repo, repo_id)
+            if repo is not None:
+                session.delete(repo)

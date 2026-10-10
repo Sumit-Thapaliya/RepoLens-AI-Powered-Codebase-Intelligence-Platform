@@ -16,7 +16,6 @@ import time
 from collections import OrderedDict
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from repolens_shared.errors import RepoLensError
 from repolens_shared.utils import stable_id
@@ -26,7 +25,8 @@ from ..core.config import Settings, get_settings
 from ..core.db import session_scope
 from ..models.tables import Analysis, Repo
 from .github import GitHubClient
-from .store import find_repo_by_full_name, repo_payload
+from .store import delete_analysis_rows, find_repo_by_full_name, repo_payload
+from .windows import get_windows
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,6 @@ class AnalysisManager:
             analysis = Analysis(id=analysis_id, repo_id=repo.id, status="queued", stage="queued", progress=0.0,
                                 branch=selected, message="Queued for analysis.")
             session.add(analysis)
-            _prune_history(session, repo.id, keep=8)
             repo_id = repo.id
             repo_snapshot = repo_payload(repo)
 
@@ -140,6 +139,32 @@ class AnalysisManager:
         event.set()
         return True
 
+    # --------------------------------------------------------------- discard
+    def discard(self, analysis_id: str) -> bool:
+        """Delete a run and all of its data. A run still in progress is cancelled first.
+
+        Returns False when the run was still active; it is discarded by a later sweep once it stops.
+        """
+        if analysis_id in self.in_flight():
+            self.cancel(analysis_id)
+            return False
+        with session_scope() as session:
+            delete_analysis_rows(session, analysis_id)
+        self._history.pop(analysis_id, None)
+        get_windows().forget(analysis_id)
+        return True
+
+    def sweep_windows(self) -> list[str]:
+        """Discard every run whose windows have all closed. Returns the ids that were removed."""
+        removed = []
+        for analysis_id in get_windows().expired():
+            try:
+                if self.discard(analysis_id):
+                    removed.append(analysis_id)
+            except Exception:  # keep sweeping even if one run fails
+                logger.warning("Could not discard run %s", analysis_id, exc_info=True)
+        return removed
+
     async def shutdown(self) -> None:
         for event in self._cancel_events.values():
             event.set()
@@ -153,27 +178,6 @@ class AnalysisManager:
     # ------------------------------------------------------------- summaries
     def progress_of(self, analysis_id: str) -> dict | None:
         return self._history.get(analysis_id)
-
-
-def _prune_history(session: Session, repo_id: str, keep: int = 8) -> None:
-    """Keep the most recent runs per repository (each run is a full snapshot, so
-    unbounded history would grow the database without being useful)."""
-    stale = session.execute(
-        select(Analysis.id).where(Analysis.repo_id == repo_id).order_by(Analysis.created_at.desc()).offset(keep)
-    ).scalars().all()
-    if not stale:
-        return
-    from ..models.tables import (
-        AnalysisArtifact, ApiEndpointRecord, ChunkRecord, CycleRecord, DbModelRecord, DbQueryRecord,
-        DbTechnologyRecord, FileRecord, FrameworkRecord, GraphEdgeRecord, GraphNodeRecord, ManifestRecord,
-        QualityIssueRecord, SymbolRecord, WorkflowRecord,
-    )
-    for model in (FileRecord, SymbolRecord, ChunkRecord, ApiEndpointRecord, DbModelRecord, DbQueryRecord,
-                  DbTechnologyRecord, WorkflowRecord, GraphNodeRecord, GraphEdgeRecord, CycleRecord,
-                  FrameworkRecord, ManifestRecord, QualityIssueRecord, AnalysisArtifact):
-        session.query(model).filter(model.analysis_id.in_(stale)).delete(synchronize_session=False)
-    session.query(Analysis).filter(Analysis.id.in_(stale)).delete(synchronize_session=False)
-    logger.info("Pruned %d old analysis run(s) for repo %s", len(stale), repo_id)
 
 
 def _apply_metadata(repo: Repo, metadata) -> None:

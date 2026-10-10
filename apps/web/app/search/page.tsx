@@ -2,24 +2,24 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { FileSearch, Filter, Search as SearchIcon, Sparkles, Type } from "lucide-react";
+import { Check, Copy, FileSearch, Filter, Search as SearchIcon, Type } from "lucide-react";
 import { RunGate } from "@/components/app/run-gate";
 import { Badge } from "@/components/ui/badge";
+import { Highlight } from "@/components/common/highlight";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { EmptyState, ErrorState, InlineNote, SkeletonCard } from "@/components/ui/states";
-import { ApiError, getChatSuggestions, getCapabilities, grep, search as semanticSearch } from "@/lib/api";
-import type { Capabilities, SearchHit } from "@/lib/types";
+import { EmptyState, ErrorState, InlineNote, SkeletonCard, useToast } from "@/components/ui/states";
+import { ApiError, grep, search as rankedSearch } from "@/lib/api";
+import type { SearchHit } from "@/lib/types";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
-import { cn } from "@/lib/utils";
 
 const EXAMPLE_QUERIES = [
-  "password hashing and token creation",
-  "how requests are authenticated",
-  "database session management",
-  "configuration and environment settings",
-  "background/email sending",
+  "password hash",
+  "authenticate user",
+  "session token",
+  "load config settings",
+  "send email",
 ];
 
 interface GrepMatch {
@@ -29,40 +29,58 @@ interface GrepMatch {
   kind?: string;
 }
 
+type SearchMode = "ranked" | "text";
+
 function SearchBody() {
   const { analysisId } = useAnalysisContext();
   const router = useRouter();
-  const [tab, setTab] = React.useState("semantic");
+  const [mode, setMode] = React.useState<SearchMode>("ranked");
   const [query, setQuery] = React.useState("");
   const [hits, setHits] = React.useState<SearchHit[]>([]);
   const [matches, setMatches] = React.useState<GrepMatch[]>([]);
-  const [backend, setBackend] = React.useState<{ backend?: string; embedding?: { provider: string; neural: boolean } }>({});
-  const [capabilities, setCapabilities] = React.useState<Capabilities | null>(null);
-  const [suggestions, setSuggestions] = React.useState<string[]>([]);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<ApiError | null>(null);
   const [searched, setSearched] = React.useState(false);
+  const [lastQuery, setLastQuery] = React.useState("");
+  const [copiedPath, setCopiedPath] = React.useState<string | null>(null);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const { push } = useToast();
 
+  // "/" focuses the search box from anywhere on the page, unless the user is already typing.
   React.useEffect(() => {
-    if (!analysisId) return;
-    getCapabilities().then(setCapabilities).catch(() => setCapabilities(null));
-    getChatSuggestions(analysisId)
-      .then((payload) => setSuggestions(payload.suggestions))
-      .catch(() => setSuggestions([]));
-  }, [analysisId]);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))) return;
+      event.preventDefault();
+      inputRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const copyPath = async (path: string) => {
+    try {
+      await navigator.clipboard.writeText(path);
+      setCopiedPath(path);
+      window.setTimeout(() => setCopiedPath((current) => (current === path ? null : current)), 1500);
+    } catch {
+      push({ tone: "error", title: "Could not copy the path", detail: "Your browser blocked clipboard access." });
+    }
+  };
 
   const runSearch = React.useCallback(
-    async (text: string, mode = tab) => {
+    async (text: string, nextMode: SearchMode = mode) => {
       const trimmed = text.trim();
       if (!analysisId || !trimmed) return;
+      setLastQuery(trimmed);
       setLoading(true);
       setError(null);
       setSearched(true);
       try {
-        if (mode === "semantic") {
-          const payload = await semanticSearch(analysisId, trimmed, 20);
+        if (nextMode === "ranked") {
+          const payload = await rankedSearch(analysisId, trimmed, 20);
           setHits(payload.hits);
-          setBackend({ backend: payload.backend, embedding: payload.embedding });
         } else {
           const payload = await grep(analysisId, trimmed, 120);
           setMatches(payload.matches);
@@ -73,11 +91,17 @@ function SearchBody() {
         setLoading(false);
       }
     },
-    [analysisId, tab],
+    [analysisId, mode],
   );
 
   const open = (path: string, line?: number | null) =>
     router.push(`/explorer?path=${encodeURIComponent(path)}${line ? `&line=${line}` : ""}`);
+
+  const switchMode = (value: string) => {
+    const next = value === "text" ? "text" : "ranked";
+    setMode(next);
+    if (query.trim()) void runSearch(query, next);
+  };
 
   return (
     <div className="space-y-4 p-4 lg:p-6">
@@ -85,23 +109,13 @@ function SearchBody() {
         <div>
           <h1 className="text-base font-semibold tracking-tight">Search</h1>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Two indexes over the stored analysis: a semantic search across code chunks, and an exact text search for
-            identifiers and strings.
+            Find code in this analysis by name, keyword or exact text. Results are ranked by how well they match your
+            words in the file path, symbol names and code.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {capabilities ? (
-            <>
-              <Badge variant={capabilities.embeddings.neural ? "success" : "warning"} className="font-normal">
-                embeddings: {capabilities.embeddings.provider}
-                {capabilities.embeddings.neural ? "" : " (lexical blend)"}
-              </Badge>
-              <Badge variant="outline" className="font-normal">
-                vector store: {capabilities.database.pgvector ? "pgvector" : "in-process cosine"}
-              </Badge>
-            </>
-          ) : null}
-        </div>
+        <Badge variant="outline" className="font-normal">
+          ranking: keyword match (no AI)
+        </Badge>
       </div>
 
       <form
@@ -114,16 +128,20 @@ function SearchBody() {
         <div className="relative min-w-[300px] flex-1">
           <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
+            ref={inputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder={tab === "semantic" ? "Describe what you are looking for…" : "Exact text, e.g. get_user_by_email"}
-            className="h-10 pl-9"
+            placeholder={mode === "ranked" ? "Keywords, e.g. password hash" : "Exact text, e.g. get_user_by_email"}
+            className="h-10 pl-9 pr-9"
           />
+          <kbd className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded border border-border px-1.5 text-2xs text-muted-foreground">
+            /
+          </kbd>
         </div>
-        <Tabs value={tab} onValueChange={(value) => { setTab(value); if (query) void runSearch(query, value); }}>
+        <Tabs value={mode} onValueChange={switchMode}>
           <TabsList className="h-10">
-            <TabsTrigger value="semantic" className="h-8">
-              <Sparkles className="size-3" /> Semantic
+            <TabsTrigger value="ranked" className="h-8">
+              <SearchIcon className="size-3" /> Ranked
             </TabsTrigger>
             <TabsTrigger value="text" className="h-8">
               <Type className="size-3" /> Exact text
@@ -146,8 +164,7 @@ function SearchBody() {
             className="rounded-full border border-border px-2.5 py-1 text-2xs text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground"
             onClick={() => {
               setQuery(example);
-              void runSearch(example, "semantic");
-              setTab("semantic");
+              void runSearch(example, mode);
             }}
           >
             {example}
@@ -157,8 +174,15 @@ function SearchBody() {
 
       {error ? <ErrorState error={error} onRetry={() => void runSearch(query)} /> : null}
 
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsContent value="semantic" className="mt-0">
+      {lastQuery && !loading ? (
+        <p className="text-xs text-muted-foreground">
+          {mode === "ranked" ? hits.length : matches.length} {mode === "ranked" ? "ranked" : "exact"} result
+          {(mode === "ranked" ? hits.length : matches.length) === 1 ? "" : "s"} for “{lastQuery}”
+        </p>
+      ) : null}
+
+      <Tabs value={mode} onValueChange={switchMode}>
+        <TabsContent value="ranked" className="mt-0">
           {loading && !hits.length ? (
             <SkeletonCard lines={8} />
           ) : hits.length ? (
@@ -179,24 +203,39 @@ function SearchBody() {
                             {hit.symbol}
                           </Badge>
                         ) : null}
-                        <span className="text-2xs tabular-nums text-muted-foreground">score {hit.score.toFixed(3)}</span>
+                        <span className="text-2xs tabular-nums text-muted-foreground">score {hit.score.toFixed(2)}</span>
                       </span>
                     </div>
                     <pre className="mono mt-2 max-h-40 overflow-hidden whitespace-pre-wrap break-words rounded-lg border border-border bg-surface-muted/50 p-3 text-[0.72rem] leading-relaxed text-muted-foreground">
-                      {hit.snippet}
+                      <Highlight text={hit.snippet} query={lastQuery} />
                     </pre>
                   </button>
+                  <div className="mt-2 flex justify-end">
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => void copyPath(hit.path)}
+                      aria-label={`Copy path ${hit.path}`}
+                    >
+                      {copiedPath === hit.path ? <Check /> : <Copy />}
+                      {copiedPath === hit.path ? "Copied" : "Copy path"}
+                    </Button>
+                  </div>
                 </li>
               ))}
             </ul>
           ) : searched ? (
             <EmptyState
               icon={FileSearch}
-              title="No chunk matched"
-              detail="Try a different phrasing, or switch to Exact text to search identifiers verbatim. Semantic scores blend vector similarity with lexical overlap when no neural embedding key is configured."
+              title="No match"
+              detail="Try fewer or different keywords, or switch to Exact text to search a string verbatim."
             />
           ) : (
-            <EmptyState icon={Sparkles} title="Semantic search" detail="Describe the behaviour you are looking for; results point at concrete chunks with their file and line." />
+            <EmptyState
+              icon={SearchIcon}
+              title="Ranked search"
+              detail="Type keywords from the code you are looking for. Results point at the matching file, symbol and line."
+            />
           )}
         </TabsContent>
 
@@ -218,24 +257,27 @@ function SearchBody() {
                       </span>
                       {match.kind ? <Badge variant="outline">{match.kind}</Badge> : null}
                     </div>
-                    <p className="mono mt-1 line-clamp-2 text-2xs text-muted-foreground">{match.text}</p>
+                    <p className="mono mt-1 line-clamp-2 text-2xs text-muted-foreground">
+                      <Highlight text={match.text} query={lastQuery} />
+                    </p>
                   </button>
                 </li>
               ))}
             </ul>
           ) : searched ? (
-            <EmptyState icon={Type} title={`No occurrence of “${query}”`} detail="Exact text search runs over parsed file contents and stored docs for this run only." />
+            <EmptyState
+              icon={Type}
+              title={`No occurrence of “${query}”`}
+              detail="Exact text search runs over the indexed file contents of this analysis."
+            />
           ) : (
             <EmptyState icon={Type} title="Exact text search" detail="Search for an identifier, route path or config key verbatim." />
           )}
         </TabsContent>
       </Tabs>
 
-      {suggestions.length && !searched ? (
-        <InlineNote>
-          Generated questions for this repository that the AI chat can answer:{" "}
-          {suggestions.slice(0, 4).join(" · ")}
-        </InlineNote>
+      {!searched ? (
+        <InlineNote>Search runs over this analysis only. Nothing is saved after the server restarts.</InlineNote>
       ) : null}
     </div>
   );

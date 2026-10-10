@@ -2,7 +2,7 @@
 
 ``analyze_source`` never raises for source-level problems: every failure is
 recorded on the returned ``ParsedFile`` so one broken file can never abort a
-repository analysis (see the engineering rules in the README).
+repository analysis (see the grounding rules in the README).
 """
 
 from __future__ import annotations

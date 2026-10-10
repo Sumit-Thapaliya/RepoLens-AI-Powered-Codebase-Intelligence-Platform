@@ -18,11 +18,10 @@ dependencies = [
     "repolens-shared",
     "repolens-parser",
     "repolens-graph",
-    "repolens-embeddings",
 ]
 
 [project.optional-dependencies]
-postgres = ["psycopg[binary]>=3.1"]
+postgres = ["psycopg[binary]>=3.1"]  # needed only when DATABASE_URL points at Postgres (e.g. Neon)
 
 [tool.setuptools.packages.find]
 where = ["."]

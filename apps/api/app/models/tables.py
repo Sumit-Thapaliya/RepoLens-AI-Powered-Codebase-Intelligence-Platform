@@ -152,7 +152,6 @@ class ChunkRecord(Base):
     end_line: Mapped[int] = mapped_column(Integer, default=1)
     text: Mapped[str] = mapped_column(Text)
     tokens: Mapped[int] = mapped_column(Integer, default=0)
-    embedding: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON fallback / pgvector (added at runtime)
 
 
 class ApiEndpointRecord(Base):
@@ -347,17 +346,4 @@ class AnalysisArtifact(Base):
     kind: Mapped[str] = mapped_column(String(60))
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     generated_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-class ChatMessageRecord(Base):
-    __tablename__ = "chat_messages"
-    __table_args__ = (Index("ix_chat_analysis", "analysis_id"),)
-
-    id: Mapped[str] = mapped_column(String(40), primary_key=True)
-    analysis_id: Mapped[str] = mapped_column(String(32), index=True)
-    role: Mapped[str] = mapped_column(String(20))
-    content: Mapped[str] = mapped_column(Text)
-    citations: Mapped[list] = mapped_column(JSON, default=list)
-    model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

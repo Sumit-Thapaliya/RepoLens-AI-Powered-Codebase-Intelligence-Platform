@@ -86,7 +86,7 @@ def resolve_target_path(session: Session, analysis_id: str, candidate: str) -> s
 
 
 def impact_summary_lines(report: dict[str, Any]) -> list[str]:
-    """Compact, human readable rendering of an impact report (used by chat)."""
+    """Compact, human readable rendering of an impact report (used by the impact view)."""
     target = report.get("target") or {}
     lines = [f"target: {target.get('path')} (layer {target.get('layer')}, {target.get('loc')} loc)"]
     lines.append(f"direct dependencies: {len(report.get('direct_dependencies') or [])}")
