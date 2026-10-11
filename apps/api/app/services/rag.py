@@ -252,20 +252,7 @@ class RagService:
         except RagServiceError:
             raise
         except Exception as exc:
-            # logger.warning("Neon RAG status lookup failed (%s)", type(exc).__name__)
-            detail = str(exc)
-            detail = re.sub(r"(?i)postgres(?:ql)?://\S+", "postgresql://<redacted>", detail)
-            detail = re.sub(
-                r"(?i)((?:password|pwd)\s*[=:]\s*)[^&\s,]+",
-                r"\1<redacted>",
-                detail,
-            )
-            logger.warning(
-                "Neon RAG status lookup failed (%s, sqlstate=%s): %s",
-                type(exc).__name__,
-                getattr(exc, "sqlstate", None),
-                detail[:300],
-            )
+            logger.warning("Neon RAG status lookup failed (%s)", type(exc).__name__)
             return {
                 **base,
                 "storage_available": False,
@@ -570,8 +557,8 @@ class RagService:
             raise
         except Exception as exc:
             if getattr(exc, "sqlstate", None) == "42P01":
-                # A database with no RAG index tables is a normal first-run state.
-                connection.rollback()
+                # A missing index table is normal on first use. Psycopg's connection
+                # context has already rolled back and closed the connection here.
                 return None
             logger.warning("Neon RAG database read failed (%s)", type(exc).__name__)
             raise RagStorageFailure("Persistent chat storage is unavailable.") from exc

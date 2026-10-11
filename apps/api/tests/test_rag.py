@@ -97,6 +97,55 @@ class RagServiceTests(unittest.TestCase):
         self.assertIn("untrusted repository data", messages[-1]["content"])
         self.assertIn("Current question: Where is auth checked?", messages[-1]["content"])
 
+    def test_missing_index_table_is_a_normal_unindexed_state(self) -> None:
+        class UndefinedTable(Exception):
+            sqlstate = "42P01"
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, *_args):
+                raise UndefinedTable("relation does not exist")
+
+            def fetchone(self):
+                return None
+
+        class Connection:
+            closed = False
+            rollback_called = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.closed = True
+                return False
+
+            def cursor(self):
+                return Cursor()
+
+            def rollback(self):
+                self.rollback_called = True
+                if self.closed:
+                    raise RuntimeError("the connection is closed")
+
+        settings = Settings(
+            _env_file=None,
+            RAG_DATABASE_URL="postgresql://user:pass@example.neon.tech/db",
+            RAG_API_KEY="provider-secret",
+        )
+        service = RagService(settings)
+        connection = Connection()
+        service._database_connection = lambda: connection  # type: ignore[method-assign]
+
+        self.assertIsNone(service._read_index("owner/repo", "a" * 40))
+        self.assertTrue(connection.closed)
+        self.assertFalse(connection.rollback_called)
+
     def test_embedding_requests_use_server_key_and_validate_provider_dimensions(self) -> None:
         token = "server-only-rag-token"
         settings = Settings(
