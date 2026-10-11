@@ -13,7 +13,7 @@ export const metadata: Metadata = {
   title: "RepoLens · codebase intelligence",
   icons: { icon: "/repolens-logo.jpg", shortcut: "/repolens-logo.jpg", apple: "/repolens-logo.jpg" },
   description:
-    "Analyze GitHub repositories with static architecture, workflow, API, database, dependency, search and impact insights.",
+    "Analyze public GitHub repositories with static code insights and optional source-grounded AI chat.",
 };
 
 export const viewport: Viewport = {
@@ -46,8 +46,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                         <PageFrame>{children}</PageFrame>
                       </main>
                       <footer className="border-t border-border px-4 py-3 text-2xs text-muted-foreground lg:px-6">
-                        RepoLens statically analyzes GitHub repositories. Every number comes from parsed source;
-                        heuristic findings are labelled, and nothing is sent to a language model.
+                        RepoLens performs deterministic static analysis. If AI chat is configured, retrieved code excerpts and recent chat context are sent server-side to the configured model; credentials are never exposed to the browser.
                       </footer>
                     </div>
                   </div>

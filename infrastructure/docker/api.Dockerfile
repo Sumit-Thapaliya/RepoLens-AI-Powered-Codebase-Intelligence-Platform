@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------------
 # RepoLens API image - FastAPI analysis engine + Python packages
-# Analysis data lives in memory. Temporary source checkouts are deleted after every run.
+# Analysis artifacts stay in memory; optional RAG excerpts are stored in Neon pgvector.
 # ---------------------------------------------------------------------------
 FROM python:3.12-slim AS base
 
@@ -34,11 +34,11 @@ USER repolens
 
 ENV APP_ENV=production
 
-EXPOSE 8000
+EXPOSE 10000
 
 WORKDIR /srv/repolens/apps/api
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health').status==200 else 1)"
+  CMD python -c "import os,urllib.request,sys; port=os.getenv('PORT','8000'); sys.exit(0 if urllib.request.urlopen(f'http://127.0.0.1:{port}/api/health').status==200 else 1)"
 
-# One worker only: analysis results are held by this process.
-CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# One worker only: analysis results are held by this process. Honor Render's PORT.
+CMD ["sh", "-c", "python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]

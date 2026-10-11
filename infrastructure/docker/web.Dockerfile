@@ -9,7 +9,9 @@ RUN npm ci --no-audit --no-fund
 FROM node:20-alpine AS builder
 WORKDIR /srv/web
 ARG NEXT_PUBLIC_API_BASE=/backend
+ARG API_INTERNAL_URL=http://127.0.0.1:8000
 ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE \
+    API_INTERNAL_URL=$API_INTERNAL_URL \
     NEXT_TELEMETRY_DISABLED=1 \
     NODE_OPTIONS=--max-old-space-size=2048
 COPY --from=deps /srv/web/node_modules ./node_modules
@@ -30,5 +32,5 @@ COPY --from=builder --chown=repolens:repolens /srv/web/public ./public
 COPY --from=builder --chown=repolens:repolens /srv/web/.next/standalone ./
 COPY --from=builder --chown=repolens:repolens /srv/web/.next/static ./.next/static
 USER repolens
-EXPOSE 3000
+EXPOSE 10000
 CMD ["node", "server.js"]

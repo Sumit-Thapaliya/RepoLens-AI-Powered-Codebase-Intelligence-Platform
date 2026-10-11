@@ -1,5 +1,8 @@
 /** @type {import('next').NextConfig} */
-const API_INTERNAL_URL = process.env.API_INTERNAL_URL || "http://127.0.0.1:8000";
+const rawApiInternalUrl = process.env.API_INTERNAL_URL || "http://127.0.0.1:8000";
+const API_INTERNAL_URL = /^https?:\/\//i.test(rawApiInternalUrl)
+  ? rawApiInternalUrl.replace(/\/$/, "")
+  : `http://${rawApiInternalUrl.replace(/\/$/, "")}`;
 
 const nextConfig = {
   reactStrictMode: true,

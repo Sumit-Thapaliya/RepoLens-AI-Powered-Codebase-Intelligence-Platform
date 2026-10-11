@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import routes_analysis, routes_insights, routes_repos, routes_system
+from .api import routes_analysis, routes_chat, routes_insights, routes_repos, routes_system
 from .analyzers.pipeline import cleanup_orphaned_workdirs
 from .core.capabilities import describe_capabilities
 from .core.config import get_settings
@@ -45,8 +45,9 @@ async def lifespan(app: FastAPI):
         logger.info("Storage ready: %s (dialect=%s)", info.get("storage"), info.get("dialect"))
         capabilities = describe_capabilities()
         github_access = "authenticated" if settings.github_token else "anonymous"
-        logger.info("Search: %s | GitHub access: %s, public repositories only",
-                    capabilities["search"]["ranking"], github_access)
+        logger.info("Search: %s | GitHub access: %s, public repositories only | RAG chat: %s",
+                    capabilities["search"]["ranking"], github_access,
+                    "configured" if settings.rag_enabled else "not configured")
     except Exception as exc:
         logger.error("Database initialisation failed: %s", exc)
     sweeper = asyncio.create_task(_sweep_closed_windows())
@@ -60,11 +61,12 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="RepoLens API",
         description=(
-            "Static codebase intelligence for GitHub repositories: architecture, workflows, dependencies, "
-            "APIs, database usage, code quality and ranked search. Analysis artifacts use in-memory SQLite "
-            "and disappear when the API stops; temporary source checkouts are removed after each run. "
-            "Only public repositories are supported. GitHub API access is anonymous by default; an optional "
-            "server-side GITHUB_TOKEN can authenticate public-data requests for a higher rate limit."
+            "Static codebase intelligence and optional, source-grounded repository chat for public GitHub repositories. "
+            "Analysis artifacts use in-memory SQLite and disappear when the API stops; temporary source checkouts are "
+            "removed after each run. When RAG is configured, a bounded set of code excerpts and embeddings is stored "
+            "in Neon pgvector, and retrieved excerpts are sent server-side to the configured model for chat. "
+            "Only public repositories are supported. GitHub API access is anonymous by default; an optional server-side "
+            "GITHUB_TOKEN can authenticate public-data requests for a higher rate limit."
         ),
         version="0.1.0",
         lifespan=lifespan,
@@ -97,6 +99,7 @@ def create_app() -> FastAPI:
     app.include_router(routes_system.router, prefix="/api")
     app.include_router(routes_repos.router, prefix="/api")
     app.include_router(routes_analysis.router, prefix="/api")
+    app.include_router(routes_chat.router, prefix="/api")
     app.include_router(routes_insights.router, prefix="/api")
 
     @app.get("/", include_in_schema=False)
@@ -106,7 +109,8 @@ def create_app() -> FastAPI:
     @app.get("/api", include_in_schema=False)
     def api_root() -> dict:
         return {"name": "RepoLens API", "version": "0.1.0",
-                "endpoints": ["/api/health", "/api/system/capabilities", "/api/repos/resolve", "/api/analyses"]}
+                "endpoints": ["/api/health", "/api/system/capabilities", "/api/repos/resolve",
+                              "/api/analyses", "/api/analyses/{analysis_id}/chat"]}
 
     return app
 

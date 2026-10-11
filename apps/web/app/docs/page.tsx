@@ -1,16 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { BookOpen, Download, FileJson, Loader2, RefreshCw, Server, Database } from "lucide-react";
+import { BookOpen, Download, FileJson, Loader2, RefreshCw } from "lucide-react";
 import { RunGate } from "@/components/app/run-gate";
 import { Markdown } from "@/components/common/markdown";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ErrorState, InlineNote, SkeletonCard, useToast } from "@/components/ui/states";
 import { generateDoc, getBundle, getDoc } from "@/lib/api";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
-import { formatBytes, useApi, useCapabilities } from "@/lib/hooks";
+import { formatBytes, useApi } from "@/lib/hooks";
 
 const KINDS = [
   { id: "readme", label: "Repository overview", detail: "What the project is, how it is structured, how to run it" },
@@ -28,7 +27,6 @@ function DocsBody() {
     analysisId ? `document:${analysisId}:${kind}` : null,
     () => getDoc(analysisId!, kind),
   );
-  const { data: capabilities } = useCapabilities();
 
   const load = React.useCallback(async () => {
     await mutate();
@@ -107,7 +105,7 @@ function DocsBody() {
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
+      <div className="space-y-4">
         <section className="panel overflow-hidden">
           <Tabs value={kind} onValueChange={setKind}>
             <div className="panel-header">
@@ -140,74 +138,10 @@ function DocsBody() {
           </Tabs>
         </section>
 
-        <div className="space-y-4">
-          <section className="panel">
-            <div className="panel-header">
-              <span className="panel-title">What powers this analysis</span>
-            </div>
-            <ul className="divide-y divide-border text-xs">
-              {capabilities ? (
-                <>
-                  <li className="flex items-center justify-between gap-3 px-5 py-2.5">
-                    <span className="flex items-center gap-2 text-muted-foreground">
-                      <Server className="size-3.5" /> Storage
-                    </span>
-                    <span className="text-right">
-                      <span className="block">In-memory SQLite</span>
-                      <span className="text-2xs text-muted-foreground">Temporary source checkouts are removed after each run.</span>
-                    </span>
-                  </li>
-                  <li className="flex items-center justify-between gap-3 px-5 py-2.5">
-                    <span className="flex items-center gap-2 text-muted-foreground">
-                      <Database className="size-3.5" /> Search
-                    </span>
-                    <span className="text-right">
-                      <span className="block">keyword ranking</span>
-                      <span className="text-2xs text-muted-foreground">no AI, no embeddings</span>
-                    </span>
-                  </li>
-                  <li className="flex items-center justify-between gap-3 px-5 py-2.5">
-                    <span className="text-muted-foreground">GitHub API</span>
-                    <span className="text-right">
-                      <span className="block">{capabilities.github.note}</span>
-                      <span className="text-2xs text-muted-foreground">{capabilities.github.rate_limit}</span>
-                    </span>
-                  </li>
-                </>
-              ) : (
-                <li className="px-5 py-4 text-muted-foreground">Capabilities unavailable.</li>
-              )}
-            </ul>
-            <div className="border-t border-border p-4">
-              <InlineNote>{capabilities?.storage.note ?? ""}</InlineNote>
-            </div>
-          </section>
-
-          <section className="panel">
-            <div className="panel-header">
-              <span className="panel-title">Limits in effect</span>
-              <Badge variant="outline" className="font-normal">
-                env configurable
-              </Badge>
-            </div>
-            <ul className="divide-y divide-border text-xs">
-              {capabilities
-                ? Object.entries(capabilities.limits).map(([key, value]) => (
-                    <li key={key} className="flex items-center justify-between px-5 py-2">
-                      <span className="text-muted-foreground">{key.replace(/_/g, " ")}</span>
-                      <span className="tabular-nums">{typeof value === "number" ? value.toLocaleString() : String(value)}</span>
-                    </li>
-                  ))
-                : null}
-            </ul>
-          </section>
-
-          <InlineNote>
-            The JSON bundle contains every stored artefact for this run — overview, architecture, endpoints, database,
-            workflows, dependencies, quality, frameworks and manifests — so you can diff two analyses offline or feed them
-            into CI.
-          </InlineNote>
-        </div>
+        <InlineNote>
+          The JSON bundle exports this run’s analysis artefacts — overview, architecture, endpoints, database, workflows,
+          dependencies, quality, frameworks and manifests — for offline review or CI.
+        </InlineNote>
       </div>
     </div>
   );

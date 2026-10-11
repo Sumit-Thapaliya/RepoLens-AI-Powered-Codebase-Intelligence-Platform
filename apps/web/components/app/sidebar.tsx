@@ -12,6 +12,7 @@ import {
   Gauge,
   GitBranch,
   LayoutDashboard,
+  MessageSquareText,
   Route,
   Settings2,
   ShieldAlert,
@@ -35,6 +36,7 @@ const NAV = [
   { section: "Investigate", items: [
     { href: "/explorer", label: "Code Explorer", icon: FileCode2 },
     { href: "/search", label: "Search", icon: Sparkles },
+    { href: "/chat", label: "AI Chat", icon: MessageSquareText },
     { href: "/quality", label: "Quality", icon: Gauge },
     { href: "/impact", label: "Impact Analysis", icon: ShieldAlert },
   ]},

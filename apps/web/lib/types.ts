@@ -431,6 +431,35 @@ export interface SearchHit {
   snippet: string;
 }
 
+export interface RagCitation {
+  id: string;
+  path: string;
+  symbol?: string | null;
+  kind: string;
+  start_line: number;
+  end_line: number;
+  score: number;
+}
+
+export interface RagChatStatus {
+  enabled: boolean;
+  indexed: boolean;
+  stale: boolean;
+  chunk_count: number;
+  file_count: number;
+  indexed_at?: string | null;
+  commit_sha?: string | null;
+  repo_full_name: string;
+  storage_available?: boolean;
+  message?: string | null;
+}
+
+export interface RagChatResponse {
+  answer: string;
+  citations: RagCitation[];
+  model: string;
+}
+
 export interface ImpactFile {
   path: string;
   layer?: string;

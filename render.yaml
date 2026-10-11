@@ -1,0 +1,41 @@
+# Render Blueprint for the RAM-only RepoLens API + Next.js UI.
+# AI chat remains disabled until RAG_DATABASE_URL and RAG_API_KEY are added
+# as server-side environment variables on the API service.
+services:
+  - type: web
+    name: repolens-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./infrastructure/docker/api.Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      # One process is important: analysis artifacts and job state live in RAM.
+      - key: ANALYSIS_WORKERS
+        value: "1"
+      - key: MAX_ACTIVE_ANALYSES_PER_SESSION
+        value: "1"
+      # The browser calls the same-origin web proxy; direct cross-origin API calls are unused.
+      - key: CORS_ORIGINS
+        value: ""
+
+  - type: web
+    name: repolens-web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./infrastructure/docker/web.Dockerfile
+    dockerContext: .
+    autoDeploy: true
+    envVars:
+      - key: API_INTERNAL_URL
+        fromService:
+          type: web
+          name: repolens-api
+          property: hostport
+      - key: NEXT_PUBLIC_API_BASE
+        value: /backend

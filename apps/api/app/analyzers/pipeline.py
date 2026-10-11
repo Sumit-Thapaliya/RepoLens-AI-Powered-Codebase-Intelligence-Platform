@@ -73,6 +73,7 @@ from ..models.tables import (
     WorkflowRecord,
 )
 from ..services.github import GitHubClient, read_source_files
+from ..services.rag import RagService, RagServiceError, select_rag_chunks
 from .database import build_database_report
 from .docs import generate_docs
 from .endpoints import build_endpoints, endpoint_stats
@@ -494,11 +495,30 @@ class AnalysisPipeline:
         }
 
     async def _stage_embed(self, context: PipelineContext) -> None:
-        """Build the search index: text chunks only. No vectors are computed or stored."""
-        self._set_stage(Stage.INDEXING, detail="Building the code search index", status="running")
+        """Build the RAM keyword index and, when configured, a bounded Neon RAG index."""
+        self._set_stage(Stage.INDEXING, detail="Building repository search indexes", status="running")
         self._check_cancel()
         chunks = _build_chunks(context, max_chunks=MAX_CHUNKS, scope=self.analysis_id)
         chunk_count = len(chunks)
+        with session_scope() as session:
+            analysis = session.get(Analysis, self.analysis_id)
+            commit_sha = analysis.commit_sha if analysis else None
+
+        # Keep only the capped RAG selection in memory before the local indexer
+        # replaces its temporary source text with identifier-only terms.
+        rag_chunks: list[dict] = []
+        rag_info: dict = {"enabled": self.settings.rag_enabled, "status": "not_configured"}
+        if self.settings.rag_enabled:
+            if commit_sha:
+                rag_chunks = select_rag_chunks(
+                    chunks,
+                    limit=self.settings.rag_index_max_chunks,
+                    max_chars=self.settings.rag_chunk_max_chars,
+                )
+                rag_info = {"enabled": True, "status": "pending", "chunks": len(rag_chunks)}
+            else:
+                rag_info = {"enabled": True, "status": "skipped", "chunks": 0}
+
         # Parsed symbols are no longer needed once their bounded text chunks exist.
         context.parsed_files.clear()
         context.file_sizes.clear()
@@ -507,13 +527,69 @@ class AnalysisPipeline:
             chunks,
             store_source_snippets=self.settings.store_source_snippets,
         )
+
+        if self.settings.rag_enabled and commit_sha and rag_chunks:
+            service = RagService(self.settings)
+
+            def report_index_progress(done: int, total: int) -> None:
+                self._check_cancel()
+                fraction = 0.18 + 0.72 * (done / max(total, 1))
+                self._set_stage(
+                    Stage.INDEXING,
+                    detail=f"Embedding repository context for chat ({done}/{total} excerpts)",
+                    status="running",
+                    fraction=fraction,
+                )
+
+            try:
+                rag_info = {
+                    "enabled": True,
+                    **await service.index_repository(
+                        f"{context.owner}/{context.name}",
+                        commit_sha,
+                        rag_chunks,
+                        progress=report_index_progress,
+                    ),
+                }
+            except AnalysisCancelled:
+                raise
+            except RagServiceError as exc:
+                logger.warning(
+                    "RAG indexing was skipped for %s/%s@%s (%s)",
+                    context.owner, context.name, commit_sha[:12], type(exc).__name__,
+                )
+                rag_info = {"enabled": True, "status": "failed", "chunks": 0}
+                self._warn(
+                    "rag_index_failed",
+                    "AI chat indexing did not finish. Static analysis and keyword search completed normally.",
+                )
+            except Exception as exc:  # RAG must never make static analysis fail.
+                logger.warning(
+                    "RAG indexing crashed for %s/%s@%s (%s)",
+                    context.owner, context.name, commit_sha[:12], type(exc).__name__,
+                )
+                rag_info = {"enabled": True, "status": "failed", "chunks": 0}
+                self._warn(
+                    "rag_index_failed",
+                    "AI chat indexing did not finish. Static analysis and keyword search completed normally.",
+                )
+
         with session_scope() as session:
             analysis = session.get(Analysis, self.analysis_id)
             if analysis:
-                analysis.provider_info = {**(analysis.provider_info or {}),
-                                          "search": {"ranking": "lexical", "chunks": chunk_count}}
-        self._set_stage(Stage.INDEXING, detail=f"{chunk_count} chunks indexed for search", status="done",
-                        fraction=1.0)
+                analysis.provider_info = {
+                    **(analysis.provider_info or {}),
+                    "search": {"ranking": "lexical", "chunks": chunk_count},
+                    "rag": rag_info,
+                }
+        final_detail = f"{chunk_count} chunks indexed for search"
+        if rag_info.get("status") == "ready":
+            final_detail += f"; {rag_info.get('chunks', 0)} excerpts indexed for AI chat"
+        elif not self.settings.rag_enabled:
+            final_detail += "; AI chat not configured"
+        elif rag_info.get("status") == "failed":
+            final_detail += "; AI chat indexing unavailable"
+        self._set_stage(Stage.INDEXING, detail=final_detail, status="done", fraction=1.0)
 
     # ----------------------------------------------------------- artefacts
     def _build_overview(self, context: PipelineContext, graph, endpoints, database, workflows, quality,

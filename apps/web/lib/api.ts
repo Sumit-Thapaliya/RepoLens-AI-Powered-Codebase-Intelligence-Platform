@@ -13,6 +13,8 @@ import type {
   ImpactReport,
   Overview,
   QualityPayload,
+  RagChatResponse,
+  RagChatStatus,
   RepoMetadata,
   RepoSummary,
   SearchHit,
@@ -218,6 +220,17 @@ export const cancelAnalysis = (analysisId: string) => apiRequest<{ analysis: Ana
 export const deleteAnalysis = (analysisId: string) =>
   apiRequest<{ deleted: string; pending: boolean }>(`/analyses/${analysisId}`, { method: "DELETE" });
 export const getBundle = (analysisId: string) => apiRequest<Record<string, unknown>>(`/analyses/${analysisId}/bundle`);
+
+export const getRagChatStatus = (analysisId: string) =>
+  apiRequest<RagChatStatus>(`/analyses/${analysisId}/chat/status`);
+export const chatWithRepository = (
+  analysisId: string,
+  question: string,
+  history: { role: "user" | "assistant"; content: string }[] = [],
+) => apiRequest<RagChatResponse>(`/analyses/${analysisId}/chat`, {
+  method: "POST",
+  body: { question, history },
+});
 
 /* ---------------------------------------------------------------- insights */
 
