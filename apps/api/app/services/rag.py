@@ -252,7 +252,20 @@ class RagService:
         except RagServiceError:
             raise
         except Exception as exc:
-            logger.warning("Neon RAG status lookup failed (%s)", type(exc).__name__)
+            # logger.warning("Neon RAG status lookup failed (%s)", type(exc).__name__)
+            detail = str(exc)
+            detail = re.sub(r"(?i)postgres(?:ql)?://\S+", "postgresql://<redacted>", detail)
+            detail = re.sub(
+                r"(?i)((?:password|pwd)\s*[=:]\s*)[^&\s,]+",
+                r"\1<redacted>",
+                detail,
+            )
+            logger.warning(
+                "Neon RAG status lookup failed (%s, sqlstate=%s): %s",
+                type(exc).__name__,
+                getattr(exc, "sqlstate", None),
+                detail[:300],
+            )
             return {
                 **base,
                 "storage_available": False,
