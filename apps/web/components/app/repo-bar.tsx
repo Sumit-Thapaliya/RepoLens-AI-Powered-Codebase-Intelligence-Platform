@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { StatusPill } from "@/components/ui/states";
+import { ThemeToggle } from "@/components/app/theme-toggle";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -82,7 +83,7 @@ export function RepoBar() {
   };
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur-md">
+    <header className="sticky top-0 z-40 border-b border-border/80 bg-background/80 shadow-[0_8px_24px_-22px_rgba(0,0,0,0.9)] backdrop-blur-xl">
       <div className="flex flex-wrap items-center gap-3 px-4 py-3 lg:px-6">
         <Link href="/" className="flex items-center gap-2 lg:hidden">
           <Image
@@ -156,6 +157,7 @@ export function RepoBar() {
         </form>
 
         <div className="flex items-center gap-2">
+          <ThemeToggle />
           {analysis ? <StatusPill status={analysis.status} /> : <Badge variant="outline">no run selected</Badge>}
 
           {analysis && (analysis.status === "queued" || analysis.status === "running") ? (
@@ -249,10 +251,20 @@ export function RepoBar() {
       ) : analysis && (analysis.status === "queued" || analysis.status === "running") ? (
         <div className="flex items-center gap-3 border-t border-border/60 px-4 py-1.5 text-2xs text-muted-foreground lg:px-6">
           <Loader2 className="size-3 animate-spin text-primary" />
-          <span className="text-foreground/90">{analysis.message || analysis.stage}</span>
-          <span className="mono">{analysis.progress}%</span>
-          <div className="h-1 w-40 overflow-hidden rounded-full bg-secondary">
-            <div className="h-full rounded-full bg-primary transition-all duration-700" style={{ width: `${analysis.progress}%` }} />
+          <span className="min-w-0 flex-1 truncate text-foreground/90">{analysis.message || analysis.stage}</span>
+          <span className="mono tabular-nums text-primary">{Math.round(Math.max(0, Math.min(1, analysis.progress ?? 0)) * 100)}%</span>
+          <div
+            className="h-1 w-32 shrink-0 overflow-hidden rounded-full bg-secondary sm:w-40"
+            role="progressbar"
+            aria-label="Analysis progress"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(Math.max(0, Math.min(1, analysis.progress ?? 0)) * 100)}
+          >
+            <div
+              className="progress-shimmer h-full rounded-full bg-gradient-to-r from-primary to-accent transition-[width] duration-500 ease-out"
+              style={{ width: `${Math.round(Math.max(0, Math.min(1, analysis.progress ?? 0)) * 100)}%` }}
+            />
           </div>
         </div>
       ) : analysis?.status === "failed" ? (

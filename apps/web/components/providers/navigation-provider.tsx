@@ -53,15 +53,18 @@ export function useNavigation(): NavigationContextValue {
 
 /** Keeps the page mounted and shows a thin route progress indicator while navigation is pending. */
 export function PageFrame({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const { pendingHref } = useNavigation();
   return (
     <>
       {pendingHref ? (
         <div aria-hidden="true" className="fixed inset-x-0 top-0 z-[100] h-0.5 overflow-hidden bg-primary/10">
-          <div className="h-full w-1/3 animate-pulse bg-primary" />
+          <div className="route-progress-fill h-full w-1/3 rounded-full bg-gradient-to-r from-primary via-accent to-primary" />
         </div>
       ) : null}
-      {children}
+      <div key={pathname} className="page-enter">
+        {children}
+      </div>
     </>
   );
 }

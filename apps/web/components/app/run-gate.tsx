@@ -65,6 +65,7 @@ function StageList({ stages }: { stages: StageProgress[] }) {
 export function RunGate({ children, title = "Select or start an analysis" }: { children: React.ReactNode; title?: string }) {
   const { analysis, activeRun, error, expired, complete, loading, startAnalysis, starting } = useAnalysisContext();
   const [url, setUrl] = React.useState("");
+  const progressPercent = Math.round(Math.max(0, Math.min(1, activeRun?.progress ?? 0)) * 100);
 
   if (loading && !analysis) {
     return (
@@ -113,43 +114,56 @@ export function RunGate({ children, title = "Select or start an analysis" }: { c
 
   if (activeRun) {
     return (
-      <div className="mx-auto max-w-4xl px-6 py-10">
-        <div className="panel p-6">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <Loader2 className="size-4 animate-spin text-primary" />
-                <h2 className="text-sm font-semibold">Analysing repository</h2>
-                <StatusPill status={activeRun.status} />
+      <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-10">
+        <div className="panel relative overflow-hidden p-5 sm:p-6">
+          <div aria-hidden="true" className="pointer-events-none absolute -right-20 -top-24 size-72 rounded-full bg-primary/10 blur-3xl" />
+          <div className="relative">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Loader2 className="size-4 animate-spin text-primary" />
+                  <h2 className="text-sm font-semibold">Analysing repository</h2>
+                  <StatusPill status={activeRun.status} />
+                </div>
+                <p className="mt-1.5 text-xs text-muted-foreground">{activeRun.message || "Fetching repository metadata from GitHub…"}</p>
               </div>
-              <p className="mt-1.5 text-xs text-muted-foreground">{activeRun.message || "Fetching repository metadata from GitHub…"}</p>
+              <div className="shrink-0 text-right">
+                <p className="kpi-value text-primary">{progressPercent}%</p>
+                <p className="kpi-label">progress</p>
+              </div>
             </div>
-            <div className="text-right">
-              <p className="kpi-value">{Math.round((activeRun.progress ?? 0) * 100)}%</p>
-              <p className="kpi-label">progress</p>
+
+            <div
+              className="mt-4 h-1.5 overflow-hidden rounded-full bg-secondary/90"
+              role="progressbar"
+              aria-label="Analysis progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progressPercent}
+            >
+              <div
+                className="progress-shimmer h-full rounded-full bg-gradient-to-r from-primary to-accent transition-[width] duration-700 ease-out"
+                style={{ width: `${progressPercent}%` }}
+              />
             </div>
-          </div>
 
-          <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-secondary">
-            <div className="h-full rounded-full bg-gradient-to-r from-primary to-accent transition-all duration-700" style={{ width: `${Math.round((activeRun.progress ?? 0) * 100)}%` }} />
-          </div>
-
-          <div className="mt-6">
-            <StageList stages={activeRun.stages} />
-          </div>
-
-          {activeRun.warnings.length ? (
-            <div className="mt-5 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3">
-              <p className="text-xs font-medium text-amber-200">Warnings so far</p>
-              <ul className="mt-1.5 space-y-1">
-                {activeRun.warnings.slice(0, 6).map((warning, index) => (
-                  <li key={index} className="text-2xs text-amber-100/80">
-                    {warning.message}
-                  </li>
-                ))}
-              </ul>
+            <div className="mt-6">
+              <StageList stages={activeRun.stages} />
             </div>
-          ) : null}
+
+            {activeRun.warnings.length ? (
+              <div className="mt-5 rounded-lg border border-amber-500/25 bg-amber-500/5 p-3">
+                <p className="text-xs font-medium text-amber-200">Warnings so far</p>
+                <ul className="mt-1.5 space-y-1">
+                  {activeRun.warnings.slice(0, 6).map((warning, index) => (
+                    <li key={index} className="text-2xs text-amber-100/80">
+                      {warning.message}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
     );

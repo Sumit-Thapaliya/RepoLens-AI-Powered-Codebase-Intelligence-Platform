@@ -69,6 +69,19 @@ function WorkflowsBody() {
     [filtered, selectedId],
   );
 
+  const categories = React.useMemo(() => {
+    const grouped = new Map<string, { category: string; label: string; count: number }>();
+    for (const entry of payload?.categories ?? []) {
+      const current = grouped.get(entry.category);
+      grouped.set(entry.category, {
+        category: entry.category,
+        label: current?.label ?? entry.label,
+        count: (current?.count ?? 0) + entry.count,
+      });
+    }
+    return [...grouped.values()].sort((left, right) => right.count - left.count || left.label.localeCompare(right.label));
+  }, [payload?.categories]);
+
   if (loading && !payload) {
     return (
       <div className="grid gap-4 p-4 lg:grid-cols-[22rem_minmax(0,1fr)] lg:p-6">
@@ -79,39 +92,34 @@ function WorkflowsBody() {
   }
   if (error && !payload) return <ErrorState error={error} onRetry={() => void load()} className="m-6" />;
   if (!payload) return null;
-  const categoryFilters = new Map<
-  string,
-  { category: string; label: string; count: number }
-  >();
-
-  for (const entry of payload.categories) {
-    const existing = categoryFilters.get(entry.category);
-    categoryFilters.set(
-      entry.category,
-      existing
-        ? { ...existing, count: existing.count + entry.count }
-        : { ...entry },
-    );
-  }
 
   return (
     <div className="space-y-4 p-4 lg:p-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-base font-semibold tracking-tight">Workflows</h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {payload.total} traced flows from entry points through handlers, services and data access. Detected from
-            call-graph traversal, not declared anywhere in the source.
-          </p>
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 text-primary shadow-[0_0_24px_-12px_hsl(var(--primary)/0.65)]">
+            <GitBranch className="size-5" />
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-tight">Workflows</h1>
+              <Badge variant="outline" className="tabular-nums">{payload.total} traced</Badge>
+            </div>
+            <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+              Call paths from entry points through handlers, services and data access. Traced from the resolved call graph,
+              not declared anywhere in the source.
+            </p>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="relative">
+        <div className="flex w-full flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
+          <div className="relative min-w-[12rem] flex-1 sm:max-w-64 xl:flex-none">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Filter flows…"
-              className="h-8 w-56 pl-8 text-xs"
+              aria-label="Filter workflows"
+              className="h-9 pl-8 text-xs"
             />
           </div>
           <Tabs value={view} onValueChange={setView}>
@@ -132,25 +140,27 @@ function WorkflowsBody() {
           type="button"
           onClick={() => setCategory(null)}
           className={cn(
-            "rounded-md border px-2.5 py-1 text-2xs transition-colors",
-            category === null ? "border-primary/40 bg-primary/10 text-primary" : "border-border text-muted-foreground hover:text-foreground",
+            "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-2xs transition-all duration-200",
+            category === null
+              ? "border-primary/35 bg-primary/10 text-primary shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.12)]"
+              : "border-border/80 bg-surface/40 text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground",
           )}
         >
-          All ({payload.workflows.length})
+          All <span className="tabular-nums opacity-70">{payload.total}</span>
         </button>
-        {Array.from(categoryFilters.values()).map((entry) => (
+        {categories.map((entry) => (
           <button
             key={entry.category}
             type="button"
             onClick={() => setCategory(entry.category)}
             className={cn(
-              "rounded-md border px-2.5 py-1 text-2xs transition-colors",
+              "inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-2xs transition-all duration-200",
               category === entry.category
-                ? "border-primary/40 bg-primary/10 text-primary"
-                : "border-border text-muted-foreground hover:text-foreground",
+                ? "border-primary/35 bg-primary/10 text-primary shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.12)]"
+                : "border-border/80 bg-surface/40 text-muted-foreground hover:border-border hover:bg-secondary/40 hover:text-foreground",
             )}
           >
-            {entry.label} ({entry.count})
+            {entry.label} <span className="tabular-nums opacity-70">{entry.count}</span>
           </button>
         ))}
       </div>

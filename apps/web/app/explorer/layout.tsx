@@ -1,7 +1,3 @@
-export default function SectionLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
-  return <>{children}</>;
+export default function ExplorerLayout({ children }: { children: React.ReactNode }) {
+  return children;
 }

@@ -48,8 +48,8 @@ export function LayerBadge({ layer, className }: { layer: string; className?: st
       className={cn("inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-2xs font-medium", className)}
       style={{
         color: layerColor(layer),
-        borderColor: `${layerColor(layer)}55`,
-        backgroundColor: `${layerColor(layer)}14`,
+        borderColor: `color-mix(in srgb, ${layerColor(layer)} 38%, transparent)`,
+        backgroundColor: `color-mix(in srgb, ${layerColor(layer)} 9%, transparent)`,
       }}
     >
       <Layers className="size-2.5" />

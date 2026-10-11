@@ -3,12 +3,13 @@
 import * as React from "react";
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { AlertOctagon, Blocks, ExternalLink, Search, Unplug } from "lucide-react";
+import { AlertOctagon, Blocks, ExternalLink, Minus, Plus, Search, Unplug } from "lucide-react";
 import { RunGate } from "@/components/app/run-gate";
 import { DependencyGraph, GraphNodeDetail } from "@/components/dependencies/dependency-graph";
 import { StatCard } from "@/components/common/kpi";
 import { PathLink } from "@/components/common/path-link";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ErrorState, InlineNote, SkeletonCard } from "@/components/ui/states";
@@ -27,7 +28,9 @@ function DependenciesBody() {
   const [view, setView] = React.useState<"files" | "modules">("files");
   const [selected, setSelected] = React.useState<GraphNode | null>(null);
   const [searchTerm, setSearchTerm] = React.useState("");
-  const limit = view === "files" ? 220 : 120;
+  const [limit, setLimit] = React.useState(64);
+  const initialLimit = view === "files" ? 64 : 48;
+  const maxLimit = 256;
   const { data: payload, error, isLoading: loading, mutate } = useApi(
     analysisId ? `dependencies:${analysisId}:${view}:${limit}` : null,
     () => getDependencies(analysisId!, view, limit),
@@ -43,6 +46,12 @@ function DependenciesBody() {
   }, [payload, layerFilter]);
 
   const openFile = (path: string) => router.push(`/explorer?path=${encodeURIComponent(path)}`);
+  const changeView = (value: string) => {
+    const next = value as "files" | "modules";
+    setView(next);
+    setLimit(next === "files" ? 64 : 48);
+    setSelected(null);
+  };
 
   if (loading && !payload) {
     return (
@@ -63,45 +72,58 @@ function DependenciesBody() {
   const cycles = payload.cycles ?? [];
   const orphans = payload.orphans ?? [];
   const modules = payload.module_stats ?? [];
+  const totalNodes = Number(stats.total_nodes ?? stats.nodes ?? payload.nodes.length);
+  const shownNodes = Number(stats.shown_nodes ?? payload.nodes.length);
+  const graphTruncated = Boolean(stats.truncated);
 
   const visibleNodes = layerFilter ? payload.nodes.filter((node) => node.layer === layerFilter) : payload.nodes;
+  const visibleNodeIds = new Set(visibleNodes.map((node) => node.id));
   const visibleEdges = layerFilter
-    ? payload.edges.filter((edge) => visibleNodes.some((node) => node.id === edge.source) && visibleNodes.some((node) => node.id === edge.target))
+    ? payload.edges.filter((edge) => visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target))
     : payload.edges;
 
   return (
     <div className="space-y-4 p-4 lg:p-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h1 className="text-base font-semibold tracking-tight">Dependencies</h1>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Import and call relationships resolved across {formatNumber(Number(stats.files ?? 0))} code modules.
-            Circular dependencies, hubs and isolated modules are computed from this graph.
-            {Number(stats.excluded_files ?? 0) > 0
-              ? ` ${formatNumber(Number(stats.excluded_files))} documentation, data and asset files are excluded - they cannot import anything.`
-              : ""}
-          </p>
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="mt-0.5 flex size-10 shrink-0 items-center justify-center rounded-xl border border-accent/25 bg-accent/10 text-accent shadow-[0_0_24px_-12px_hsl(var(--accent)/0.65)]">
+            <Blocks className="size-5" />
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-tight">Dependencies</h1>
+              <Badge variant="outline" className="tabular-nums">{formatNumber(totalNodes)} nodes</Badge>
+            </div>
+            <p className="mt-1 max-w-3xl text-xs leading-relaxed text-muted-foreground">
+              Imports and resolved calls across {formatNumber(Number(stats.files ?? totalNodes))} code modules. Circular dependencies,
+              hubs and isolated modules are computed from the resolved graph.
+              {Number(stats.excluded_files ?? 0) > 0
+                ? ` ${formatNumber(Number(stats.excluded_files))} documentation, data and asset files are excluded.`
+                : ""}
+            </p>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
           {layerFilter ? (
             <button
               type="button"
-              className="rounded-md border border-primary/40 bg-primary/10 px-2 py-1 text-2xs text-primary"
+              className="rounded-lg border border-primary/35 bg-primary/10 px-2.5 py-1.5 text-2xs text-primary transition-colors hover:bg-primary/15"
               onClick={() => router.push("/dependencies")}
             >
-              layer filter: {layerLabel(layerFilter)} ✕
+              {layerLabel(layerFilter)} <span aria-hidden="true">×</span>
             </button>
           ) : null}
-          <div className="relative">
+          <div className="relative min-w-[12rem] flex-1 sm:max-w-64 xl:flex-none">
             <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               placeholder="Highlight nodes…"
-              className="h-8 w-56 pl-8 text-xs"
+              aria-label="Highlight dependency nodes"
+              className="h-9 pl-8 text-xs"
             />
           </div>
-          <Tabs value={view} onValueChange={(value) => setView(value as "files" | "modules")}>
+          <Tabs value={view} onValueChange={changeView}>
             <TabsList>
               <TabsTrigger value="files">Files</TabsTrigger>
               <TabsTrigger value="modules">Modules</TabsTrigger>
@@ -111,7 +133,7 @@ function DependenciesBody() {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
-        <StatCard label="Nodes" value={Number(stats.files ?? payload.nodes.length)} hint={`${payload.edges.length} edges in view`} icon={Blocks} tone="primary" />
+        <StatCard label="Nodes" value={totalNodes} hint={`${shownNodes} nodes loaded into the graph preview`} icon={Blocks} tone="primary" />
         <StatCard label="Import edges" value={Number(stats.import_edges ?? 0)} />
         <StatCard label="Call edges" value={Number(stats.call_edges ?? 0)} hint="Resolved cross-file calls" />
         <StatCard
@@ -132,6 +154,28 @@ function DependenciesBody() {
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-0.5">
+            <p className="text-2xs text-muted-foreground">
+              Graph preview <span className="mx-1 text-border">·</span>
+              <span className="font-medium tabular-nums text-foreground">{visibleNodes.length}</span> of {formatNumber(totalNodes)} nodes
+              {layerFilter ? ` · ${layerLabel(layerFilter)} layer` : ""}
+            </p>
+            <div className="flex items-center gap-1.5">
+              {limit > initialLimit ? (
+                <Button variant="ghost" size="xs" onClick={() => setLimit(initialLimit)}>
+                  <Minus /> Compact
+                </Button>
+              ) : null}
+              {graphTruncated && limit < maxLimit ? (
+                <Button variant="outline" size="xs" onClick={() => setLimit((current) => Math.min(maxLimit, current + 64))}>
+                  <Plus /> Show more
+                </Button>
+              ) : null}
+              {graphTruncated && limit >= maxLimit ? (
+                <span className="text-2xs text-muted-foreground">Preview capped at {maxLimit}</span>
+              ) : null}
+            </div>
+          </div>
           <DependencyGraph
             payload={{ ...payload, nodes: visibleNodes, edges: visibleEdges }}
             moduleView={view === "modules"}

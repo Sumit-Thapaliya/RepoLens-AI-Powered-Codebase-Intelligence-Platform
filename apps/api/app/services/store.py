@@ -166,11 +166,25 @@ def get_dependencies(session: Session, analysis_id: str, view: str = "files", li
     require_complete(session, analysis_id)
     if view == "modules":
         payload = get_artifact(session, analysis_id, "module_graph") or {"nodes": [], "edges": []}
-        nodes = payload.get("nodes", [])[: max(limit, 600)]
+        all_nodes = payload.get("nodes", [])
+        node_limit = min(max(int(limit), 1), 600)
+        nodes = all_nodes[:node_limit]
         node_ids = {node["id"] for node in nodes}
         edges = [edge for edge in payload.get("edges", []) if edge["source"] in node_ids and edge["target"] in node_ids]
-        return {"view": "modules", "nodes": nodes, "edges": edges, "cycles": [], "hubs": [],
-                "stats": {"nodes": len(nodes), "edges": len(edges)}}
+        return {
+            "view": "modules",
+            "nodes": nodes,
+            "edges": edges,
+            "cycles": [],
+            "hubs": [],
+            "stats": {
+                "nodes": len(nodes),
+                "edges": len(edges),
+                "shown_nodes": len(nodes),
+                "total_nodes": len(all_nodes),
+                "truncated": len(nodes) < len(all_nodes),
+            },
+        }
 
     statement = select(GraphNodeRecord).where(GraphNodeRecord.analysis_id == analysis_id)
     if layer:
@@ -225,16 +239,8 @@ def list_workflows(session: Session, analysis_id: str, category: str | None = No
                                         func.lower(WorkflowRecord.description).like(needle)))
     rows = session.execute(statement.order_by(WorkflowRecord.confidence.desc()).limit(limit)).scalars().all()
     categories = session.execute(
-        select(
-            WorkflowRecord.category,
-            func.coalesce(
-                func.min(WorkflowRecord.category_label),
-                WorkflowRecord.category,
-            ),
-            func.count(WorkflowRecord.id),
-        )
-        .where(WorkflowRecord.analysis_id == analysis_id)
-        .group_by(WorkflowRecord.category)
+        select(WorkflowRecord.category, WorkflowRecord.category_label, func.count())
+        .where(WorkflowRecord.analysis_id == analysis_id).group_by(WorkflowRecord.category, WorkflowRecord.category_label)
     ).all()
     return {
         "workflows": [_workflow_payload(row) for row in rows],

@@ -5,6 +5,7 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { monaco, setupMonaco } from "@/components/code/monaco-setup";
 import { monacoLanguage } from "@/lib/utils";
+import { useTheme } from "@/components/providers/theme-provider";
 import type { FilePayload } from "@/lib/types";
 
 setupMonaco();
@@ -18,6 +19,7 @@ export function CodeViewer({
   targetLine?: number | null;
   focusSymbol?: { start: number; end: number } | null;
 }) {
+  const { theme } = useTheme();
   const [ready, setReady] = React.useState(false);
   const decorationsRef = React.useRef<string[]>([]);
   type MonacoEditor = ReturnType<typeof monaco.editor.create>;
@@ -95,7 +97,7 @@ const editorRef = React.useRef<MonacoEditor | null>(null);
       <div className="relative min-h-0 flex-1">
         <Editor
           height="100%"
-          theme="repolens-dark"
+          theme={theme === "dark" ? "repolens-dark" : "repolens-light"}
           language={monacoLanguage(file.language)}
           value={file.content}
           onMount={handleMount}

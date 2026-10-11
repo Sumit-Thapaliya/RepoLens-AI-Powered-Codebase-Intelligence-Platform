@@ -54,7 +54,7 @@ export function Sidebar() {
   }, [router]);
 
   return (
-    <aside className="sticky top-0 hidden h-svh w-60 shrink-0 flex-col border-r border-border bg-surface/60 backdrop-blur-sm lg:flex">
+    <aside className="sticky top-0 hidden h-svh w-60 shrink-0 flex-col border-r border-border/80 bg-surface/60 shadow-[12px_0_40px_-36px_rgba(0,0,0,0.9)] backdrop-blur-xl lg:flex">
       <Link href="/" className="flex items-center gap-2.5 px-5 py-4">
         <Image
           src="/repolens-logo.jpg"
@@ -112,12 +112,12 @@ export function Sidebar() {
                         startNavigation(item.href);
                       }}
                       className={cn(
-                        "group flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[0.8125rem] transition-colors",
+                        "group relative flex items-center gap-2.5 rounded-md px-2.5 py-[7px] text-[0.8125rem] transition-all duration-200",
                         active
-                          ? "bg-primary/10 text-primary shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.25)]"
+                          ? "bg-gradient-to-r from-primary/10 to-transparent text-primary shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.2)] before:absolute before:bottom-1.5 before:left-0 before:top-1.5 before:w-0.5 before:rounded-full before:bg-primary"
                           : disabled
                             ? "cursor-not-allowed text-muted-foreground/40"
-                            : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground",
+                            : "text-muted-foreground hover:translate-x-0.5 hover:bg-secondary/50 hover:text-foreground",
                       )}
                     >
                       <Icon className="size-4 shrink-0" />

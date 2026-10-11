@@ -27,7 +27,8 @@ export function StatCard({
   const body = (
     <div
       className={cn(
-        "group relative overflow-hidden rounded-xl border border-border bg-surface/70 p-4 transition-colors hover:border-primary/40",
+        "group relative overflow-hidden rounded-xl border border-border/90 bg-surface/70 p-4 transition-all duration-200",
+        href && "panel-interactive cursor-pointer",
         className,
       )}
     >

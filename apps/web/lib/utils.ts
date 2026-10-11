@@ -104,18 +104,18 @@ export function monacoLanguage(language: string | null | undefined): string {
 
 export function layerColor(layer: string): string {
   const map: Record<string, string> = {
-    ui: "#a78bfa",
-    route: "#38bdf8",
-    middleware: "#fbbf24",
-    service: "#34d399",
-    repository: "#c084fc",
-    util: "#94a3b8",
-    config: "#737373",
-    test: "#4ade80",
-    entrypoint: "#fb923c",
-    other: "#64748b",
+    ui: "hsl(var(--layer-ui))",
+    route: "hsl(var(--layer-route))",
+    middleware: "hsl(var(--layer-middleware))",
+    service: "hsl(var(--layer-service))",
+    repository: "hsl(var(--layer-repository))",
+    util: "hsl(var(--layer-util))",
+    config: "hsl(var(--layer-config))",
+    test: "hsl(var(--layer-test))",
+    entrypoint: "hsl(var(--layer-entrypoint))",
+    other: "hsl(var(--layer-other))",
   };
-  return map[layer] ?? "#64748b";
+  return map[layer] ?? "hsl(var(--layer-other))";
 }
 
 export function layerLabel(layer: string): string {

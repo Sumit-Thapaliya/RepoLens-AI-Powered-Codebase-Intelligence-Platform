@@ -104,7 +104,7 @@ function ArchitectureBody() {
                   </div>
                   <span
                     className={cn("shrink-0 rounded border px-1.5 py-0.5 text-2xs")}
-                    style={{ color: layerColor(entry.layer), borderColor: `${layerColor(entry.layer)}55` }}
+                    style={{ color: layerColor(entry.layer), borderColor: `color-mix(in srgb, ${layerColor(entry.layer)} 38%, transparent)` }}
                   >
                     {entry.layer}
                   </span>

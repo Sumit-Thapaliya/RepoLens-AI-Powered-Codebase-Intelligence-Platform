@@ -85,6 +85,36 @@ export function setupMonaco() {
       "minimap.background": "#0d1117",
     },
   });
+
+  monaco.editor.defineTheme("repolens-light", {
+    base: "vs",
+    inherit: true,
+    rules: [
+      { token: "comment", foreground: "64748b", fontStyle: "italic" },
+      { token: "keyword", foreground: "7c3aed" },
+      { token: "string", foreground: "166534" },
+      { token: "number", foreground: "c2410c" },
+      { token: "type", foreground: "0369a1" },
+      { token: "function", foreground: "1d4ed8" },
+      { token: "class", foreground: "92400e" },
+      { token: "decorator", foreground: "c2410c" },
+      { token: "delimiter", foreground: "475569" },
+    ],
+    colors: {
+      "editor.background": "#ffffff",
+      "editor.foreground": "#1e293b",
+      "editorLineNumber.foreground": "#94a3b8",
+      "editorLineNumber.activeForeground": "#334155",
+      "editor.lineHighlightBackground": "#f1f5f9",
+      "editor.selectionBackground": "#bfdbfe",
+      "editorGutter.background": "#ffffff",
+      "editorIndentGuide.background1": "#e2e8f0",
+      "editorWidget.background": "#ffffff",
+      "editorWidget.border": "#cbd5e1",
+      "scrollbarSlider.background": "#cbd5e180",
+      "minimap.background": "#f8fafc",
+    },
+  });
 }
 
 export { monaco };

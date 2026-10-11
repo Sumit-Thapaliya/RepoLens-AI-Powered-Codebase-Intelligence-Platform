@@ -29,23 +29,89 @@
     --radius: 0.75rem;
     --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
     --font-mono: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, monospace;
+    --layer-ui: 262 83% 68%;
+    --layer-route: 199 89% 58%;
+    --layer-middleware: 38 92% 60%;
+    --layer-service: 160 84% 45%;
+    --layer-repository: 280 65% 65%;
+    --layer-util: 210 20% 65%;
+    --layer-config: 0 0% 55%;
+    --layer-test: 160 40% 45%;
+    --layer-entrypoint: 24 95% 60%;
+    --layer-other: 220 10% 55%;
+  }
+
+  html.light {
+    color-scheme: light;
+    --background: 220 24% 97%;
+    --foreground: 222 30% 14%;
+    --surface: 0 0% 100%;
+    --surface-muted: 220 20% 97%;
+    --surface-raised: 220 18% 93%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 30% 14%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 30% 14%;
+    --primary: 190 95% 30%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 17% 91%;
+    --secondary-foreground: 222 26% 18%;
+    --muted: 220 17% 91%;
+    --muted-foreground: 220 10% 39%;
+    --accent: 262 62% 48%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 68% 47%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 17% 84%;
+    --input: 220 17% 87%;
+    --ring: 190 95% 30%;
+    --layer-ui: 262 68% 44%;
+    --layer-route: 199 90% 34%;
+    --layer-middleware: 35 85% 34%;
+    --layer-service: 160 80% 29%;
+    --layer-repository: 280 62% 42%;
+    --layer-util: 215 13% 40%;
+    --layer-config: 0 0% 42%;
+    --layer-test: 155 70% 29%;
+    --layer-entrypoint: 24 85% 38%;
+    --layer-other: 220 12% 42%;
   }
 
   * {
     @apply border-border;
   }
 
-  html {
+  html.dark {
     color-scheme: dark;
   }
 
   body {
     @apply bg-background text-foreground antialiased;
     background-image:
-      radial-gradient(ellipse 80% 50% at 50% -20%, hsl(190 90% 30% / 0.14), transparent),
+      radial-gradient(ellipse 70% 44% at 0% -8%, hsl(190 90% 34% / 0.13), transparent 72%),
+      radial-gradient(ellipse 48% 34% at 100% 4%, hsl(262 70% 45% / 0.10), transparent 74%),
+      radial-gradient(ellipse 60% 44% at 60% 110%, hsl(190 80% 26% / 0.06), transparent 75%),
       linear-gradient(to bottom, hsl(220 14% 6%), hsl(220 14% 5.5%));
+    background-attachment: fixed;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
+
+  html.light body {
+    background-image:
+      radial-gradient(ellipse 70% 44% at 0% -8%, hsl(190 80% 52% / 0.11), transparent 72%),
+      radial-gradient(ellipse 48% 34% at 100% 4%, hsl(262 70% 68% / 0.09), transparent 74%),
+      linear-gradient(to bottom, hsl(var(--background)), hsl(220 25% 95%));
+  }
+
+  html.light [class*="text-rose-"] { color: hsl(0 67% 39%) !important; }
+  html.light [class*="text-amber-"] { color: hsl(32 87% 31%) !important; }
+  html.light [class*="text-emerald-"] { color: hsl(160 76% 27%) !important; }
+  html.light [class*="text-sky-"] { color: hsl(199 88% 32%) !important; }
+  html.light [class*="text-violet-"] { color: hsl(263 65% 41%) !important; }
+  html.light [class*="text-cyan-"] { color: hsl(188 80% 30%) !important; }
+  html.light [class*="text-orange-"] { color: hsl(24 85% 37%) !important; }
+  html.light [class*="text-fuchsia-"] { color: hsl(290 65% 38%) !important; }
+  html.light [class*="text-slate-"] { color: hsl(215 16% 40%) !important; }
 
   ::selection {
     background: hsl(var(--primary) / 0.28);
@@ -72,11 +138,17 @@
 
 @layer components {
   .panel {
-    @apply rounded-xl border border-border bg-surface/80 shadow-card backdrop-blur-sm;
+    @apply rounded-xl border border-border/90 bg-surface/80 shadow-card backdrop-blur-sm;
+    background-image: linear-gradient(145deg, hsl(var(--surface) / 0.84), hsl(var(--surface) / 0.68));
+  }
+
+  .panel-interactive {
+    @apply transition-all duration-200 ease-out hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-glow;
   }
 
   .panel-header {
-    @apply flex items-center justify-between gap-3 border-b border-border px-5 py-3.5;
+    @apply flex items-center justify-between gap-3 border-b border-border/80 px-5 py-3.5;
+    background-image: linear-gradient(90deg, hsl(var(--foreground) / 0.018), transparent 70%);
   }
 
   .panel-title {
@@ -161,20 +233,70 @@
   .text-balance {
     text-wrap: balance;
   }
-  .animate-in-fade {
-    animation: fade-in 0.25s ease-out;
+  .animate-in-fade,
+  .page-enter {
+    animation: page-enter 0.32s cubic-bezier(0.2, 0.7, 0.25, 1) both;
+  }
+
+  .route-progress-fill {
+    animation: route-progress 1.25s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  }
+
+  .progress-shimmer {
+    position: relative;
+    overflow: hidden;
+  }
+  .progress-shimmer::after {
+    position: absolute;
+    inset: 0;
+    content: "";
+    transform: translateX(-110%);
+    background: linear-gradient(90deg, transparent, hsl(0 0% 100% / 0.34), transparent);
+    animation: progress-shimmer 1.8s ease-in-out infinite;
   }
 }
 
-@keyframes fade-in {
+@keyframes page-enter {
   from {
     opacity: 0;
-    transform: translateY(4px);
+    transform: translateY(7px);
+    filter: blur(2px);
   }
   to {
     opacity: 1;
     transform: none;
+    filter: none;
   }
+}
+
+@keyframes route-progress {
+  0% { transform: translateX(-125%); }
+  55% { transform: translateX(105%); }
+  100% { transform: translateX(310%); }
+}
+
+@keyframes progress-shimmer {
+  100% { transform: translateX(110%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+html.theme-transition,
+html.theme-transition *,
+html.theme-transition *::before,
+html.theme-transition *::after {
+  transition-property: background-color, border-color, color, fill, stroke, box-shadow;
+  transition-duration: 240ms;
+  transition-timing-function: cubic-bezier(0.2, 0.7, 0.25, 1);
 }
 
 /* React Flow theming */

@@ -62,15 +62,15 @@ export function DonutChart({
   return (
     <div className={cn("flex flex-wrap items-center gap-5", className)}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={ariaLabel ?? "Chart"} className="shrink-0">
-        <circle cx={center} cy={center} r={radius} fill="none" stroke="#1e2530" strokeWidth={thickness} />
+        <circle cx={center} cy={center} r={radius} fill="none" stroke="hsl(var(--border))" strokeWidth={thickness} />
         {arcs}
         {centerValue !== undefined ? (
-          <text x={center} y={centerLabel ? center - 2 : center + 6} textAnchor="middle" fontSize={size >= 120 ? 22 : 18} fontWeight={600} fill="#e6edf7">
+          <text x={center} y={centerLabel ? center - 2 : center + 6} textAnchor="middle" fontSize={size >= 120 ? 22 : 18} fontWeight={600} fill="hsl(var(--foreground))">
             {centerValue}
           </text>
         ) : null}
         {centerLabel ? (
-          <text x={center} y={center + 14} textAnchor="middle" fontSize={10} fill="#8b98ab">
+          <text x={center} y={center + 14} textAnchor="middle" fontSize={10} fill="hsl(var(--muted-foreground))">
             {centerLabel}
           </text>
         ) : null}

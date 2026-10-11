@@ -40,11 +40,11 @@ function FileNodeCard({ data }: NodeProps<Node<DepNodeData>>) {
   return (
     <div
       className={cn(
-        "w-52 rounded-lg border bg-surface/95 px-2.5 py-2 backdrop-blur transition-all",
-        dimmed ? "opacity-25" : "opacity-100",
-        cycle ? "border-rose-500/60" : highlighted ? "border-primary/70" : "border-border",
+        "w-44 rounded-lg border bg-surface/95 px-2 py-1.5 shadow-sm backdrop-blur transition-all duration-200",
+        dimmed ? "opacity-30" : "opacity-100",
+        cycle ? "border-rose-500/60" : highlighted ? "border-primary/70 shadow-glow" : "border-border/90",
       )}
-      style={highlighted ? { boxShadow: `0 0 0 1px ${color}66, 0 10px 30px -16px ${color}` } : undefined}
+      style={highlighted ? { boxShadow: `0 0 0 1px color-mix(in srgb, ${color} 42%, transparent), 0 10px 30px -16px ${color}` } : undefined}
       title={node.path ?? node.id}
     >
       <Handle type="target" position={Position.Left} className="!bg-border" />
@@ -73,13 +73,18 @@ function layoutNodes(nodes: GraphNode[], moduleView: boolean): Node<DepNodeData>
     return index === -1 ? 3 : index;
   };
   const counters = [0, 0, 0, 0];
-  return nodes.map((node) => {
+  const ordered = [...nodes].sort((left, right) => {
+    const leftWeight = left.coupling ?? (left.fan_in ?? 0) + (left.fan_out ?? 0);
+    const rightWeight = right.coupling ?? (right.fan_in ?? 0) + (right.fan_out ?? 0);
+    return rightWeight - leftWeight || left.label.localeCompare(right.label);
+  });
+  return ordered.map((node) => {
     const column = lane(node.layer);
     const index = counters[column]++;
     return {
       id: node.id,
       type: "dep",
-      position: { x: column * 300, y: index * 92 },
+      position: { x: column * 248, y: index * 76 },
       data: { node, kind: moduleView ? "modules" : "files", highlighted: false, dimmed: false },
       draggable: true,
     };
@@ -117,12 +122,14 @@ export function DependencyGraph({
   const decoratedNodes = React.useMemo(
     () =>
       nodes.map((node) => {
+        const searchable = `${node.id} ${node.data.node.label} ${node.data.node.path ?? ""}`.toLowerCase();
+        const matchesSearch = needle ? searchable.includes(needle) : false;
         const highlighted = needle
-          ? node.id.toLowerCase().includes(needle)
+          ? matchesSearch
           : selectedId
             ? neighbours?.has(node.id) && node.id !== selectedId
             : false;
-        const dimmed = Boolean(needle ? !node.id.toLowerCase().includes(needle) : selectedId && !neighbours?.has(node.id));
+        const dimmed = Boolean(needle ? !matchesSearch : selectedId && !neighbours?.has(node.id));
         return { ...node, data: { ...node.data, highlighted, dimmed } };
       }),
     [nodes, needle, selectedId, neighbours],
@@ -138,13 +145,14 @@ export function DependencyGraph({
           target: edge.target,
           type: "smoothstep",
           animated: false,
-          label: edge.symbols?.length ? edge.symbols.slice(0, 2).join(", ") : undefined,
-          labelStyle: { fill: "#64748b", fontSize: 9 },
-          labelBgStyle: { fill: "#0f1319" },
+          label: active && edge.symbols?.length ? edge.symbols.slice(0, 2).join(", ") : undefined,
+          labelStyle: { fill: "hsl(var(--muted-foreground))", fontSize: 9 },
+          labelBgStyle: { fill: "hsl(var(--surface))" },
           style: {
-            stroke: active ? "#22d3ee" : edge.kind === "call" ? "#4b5563" : "#334155",
+            stroke: active ? "hsl(var(--primary))" : edge.kind === "call" ? "hsl(var(--accent) / 0.75)" : "hsl(var(--border))",
             strokeWidth: active ? 2 : 1,
             strokeDasharray: edge.kind === "call" ? "3 3" : undefined,
+            opacity: selectedId && !active ? 0.16 : 1,
           },
         };
       }),
@@ -152,28 +160,29 @@ export function DependencyGraph({
   );
 
   return (
-    <div className="relative h-[34rem] overflow-hidden rounded-xl border border-border bg-surface/50">
+    <div className="relative h-[27rem] overflow-hidden rounded-xl border border-border/90 bg-surface/50 shadow-card sm:h-[31rem]">
       <ReactFlowProvider>
         <ReactFlow
           nodes={decoratedNodes}
           edges={edges}
           nodeTypes={nodeTypes}
           fitView
-          minZoom={0.1}
-          maxZoom={2}
+          fitViewOptions={{ padding: 0.18, maxZoom: 1.1, duration: 450 }}
+          minZoom={0.2}
+          maxZoom={1.4}
           onNodeClick={(_, node) => onSelect(payload.nodes.find((entry) => entry.id === node.id) ?? null)}
           onPaneClick={() => onSelect(null)}
           proOptions={{ hideAttribution: true }}
           className="bg-transparent"
         >
-          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="hsl(220 12% 20%)" />
+          <Background variant={BackgroundVariant.Dots} gap={18} size={1} color="hsl(var(--border))" />
           <Controls showInteractive={false} className="!bottom-3 !left-3" />
           <MiniMap
             pannable
             zoomable
-            className="!bottom-3 !right-3 !h-24 !w-36 !rounded-lg !border !border-border"
+            className="!bottom-3 !right-3 !h-20 !w-32 !rounded-lg !border !border-border"
             nodeColor={(node) => layerColor((node.data as DepNodeData).node.layer)}
-            maskColor="hsl(220 14% 6% / 0.75)"
+            maskColor="hsl(var(--background) / 0.75)"
           />
         </ReactFlow>
       </ReactFlowProvider>

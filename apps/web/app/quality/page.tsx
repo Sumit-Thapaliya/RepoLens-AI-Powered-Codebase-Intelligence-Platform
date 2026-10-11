@@ -31,13 +31,13 @@ const KIND_LABELS: Record<string, string> = {
 };
 
 function HealthDial({ score, label }: { score: number; label: string }) {
-  const tone = score >= 85 ? "#34d399" : score >= 70 ? "#38bdf8" : score >= 50 ? "#fbbf24" : "#fb7185";
+  const tone = score >= 85 ? "hsl(var(--layer-service))" : score >= 70 ? "hsl(var(--layer-route))" : score >= 50 ? "hsl(var(--layer-middleware))" : "hsl(var(--destructive))";
   const circumference = 2 * Math.PI * 42;
   const offset = circumference * (1 - Math.max(0, Math.min(100, score)) / 100);
   return (
     <div className="flex items-center gap-4">
       <svg width="112" height="112" viewBox="0 0 112 112" className="shrink-0">
-        <circle cx="56" cy="56" r="42" fill="none" stroke="#1e2530" strokeWidth="9" />
+        <circle cx="56" cy="56" r="42" fill="none" stroke="hsl(var(--border))" strokeWidth="9" />
         <circle
           cx="56"
           cy="56"
@@ -50,10 +50,10 @@ function HealthDial({ score, label }: { score: number; label: string }) {
           strokeDashoffset={offset}
           transform="rotate(-90 56 56)"
         />
-        <text x="56" y="54" textAnchor="middle" fontSize="24" fontWeight="600" fill="#e6edf7">
+        <text x="56" y="54" textAnchor="middle" fontSize="24" fontWeight="600" fill="hsl(var(--foreground))">
           {score}
         </text>
-        <text x="56" y="72" textAnchor="middle" fontSize="10" fill="#8b98ab">
+        <text x="56" y="72" textAnchor="middle" fontSize="10" fill="hsl(var(--muted-foreground))">
           / 100
         </text>
       </svg>
@@ -168,10 +168,10 @@ function QualityBody() {
               centerLabel="findings"
               ariaLabel="Findings by severity"
               segments={[
-                { label: "High", value: bySeverity.high ?? 0, color: "#fb7185" },
-                { label: "Medium", value: bySeverity.medium ?? 0, color: "#fbbf24" },
-                { label: "Low", value: bySeverity.low ?? 0, color: "#38bdf8" },
-                { label: "Info", value: bySeverity.info ?? 0, color: "#94a3b8" },
+                { label: "High", value: bySeverity.high ?? 0, color: "hsl(var(--destructive))" },
+                { label: "Medium", value: bySeverity.medium ?? 0, color: "hsl(var(--layer-middleware))" },
+                { label: "Low", value: bySeverity.low ?? 0, color: "hsl(var(--layer-route))" },
+                { label: "Info", value: bySeverity.info ?? 0, color: "hsl(var(--muted-foreground))" },
               ]}
             />
           </div>

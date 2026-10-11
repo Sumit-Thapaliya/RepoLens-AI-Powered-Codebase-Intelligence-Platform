@@ -1,10 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
-import { ArrowLeft, ArrowRight, CircleChevronDown } from "lucide-react";
-import type { Workflow } from "@/lib/types";
-import { cn, basename } from "@/lib/utils";
+import { ArrowDownRight, CircleChevronDown, Workflow } from "lucide-react";
+import type { Workflow as WorkflowData } from "@/lib/types";
+import { basename, cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { PathLink } from "@/components/common/path-link";
 
 const KIND_META: Record<string, { label: string; tone: string }> = {
@@ -24,133 +24,78 @@ function kindMeta(kind: string) {
   return KIND_META[kind] ?? { label: kind, tone: "text-muted-foreground" };
 }
 
-function layerForKind(kind: string): string {
-  switch (kind) {
-    case "ui":
-      return "ui";
-    case "api":
-    case "controller":
-      return "route";
-    case "service":
-      return "service";
-    case "repository":
-    case "database":
-      return "repository";
-    case "auth":
-      return "middleware";
-    default:
-      return "other";
-  }
-}
-
-const LAYER_TEXT: Record<string, string> = {
-  ui: "text-violet-300",
-  route: "text-sky-300",
-  service: "text-emerald-300",
-  repository: "text-fuchsia-300",
-  middleware: "text-rose-300",
-  other: "text-slate-300",
-};
-
-/**
- * Swimlane rendering of a traced workflow: one column per file involved, one row
- * per call step, arrows showing when control moves between files.
- */
-export function SequenceView({ workflow }: { workflow: Workflow }) {
-  const router = useRouter();
-
-  const files = React.useMemo(() => {
-    const ordered: string[] = [];
-    workflow.steps.forEach((step) => {
-      const path = step.file_path ?? "(unknown)";
-      if (!ordered.includes(path)) ordered.push(path);
-    });
-    return ordered.slice(0, 8);
-  }, [workflow]);
-
-  const columnCount = Math.max(files.length, 1);
-  const columnOf = (path: string | null | undefined) => Math.max(files.indexOf(path ?? "(unknown)"), 0);
-
-  const open = (path: string, line?: number | null) =>
-    router.push(`/explorer?path=${encodeURIComponent(path)}${line ? `&line=${line}` : ""}`);
+/** Compact, ordered call-chain timeline for a traced workflow. */
+export function SequenceView({ workflow }: { workflow: WorkflowData }) {
+  const files = React.useMemo(
+    () => new Set(workflow.steps.map((step) => step.file_path).filter((path): path is string => Boolean(path))),
+    [workflow.steps],
+  );
 
   return (
     <div className="space-y-3">
-      <div className="overflow-x-auto pb-1 scrollbar-thin">
-        <div className="flex min-w-full gap-2">
-          {files.map((path) => {
-            const step = workflow.steps.find((entry) => (entry.file_path ?? "(unknown)") === path);
-            const layer = layerForKind(step?.kind ?? "other");
-            return (
-              <div key={path} className="min-w-[10.5rem] flex-1 rounded-lg border border-border bg-surface-muted/40 px-3 py-2">
-                <p className={cn("text-2xs font-medium uppercase tracking-wider", LAYER_TEXT[layer] ?? "text-muted-foreground")}>
-                  {layer === "route" ? "api" : layer}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => open(path)}
-                  className="mono mt-1 block w-full truncate text-left text-2xs transition-colors hover:text-primary"
-                  title={path}
-                >
-                  {basename(path)}
-                </button>
-                <p className="truncate text-2xs text-muted-foreground/70">{path.split("/").slice(0, -1).join("/") || "."}</p>
-              </div>
-            );
-          })}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/80 bg-gradient-to-br from-surface-raised/70 to-surface/40 px-3.5 py-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 text-primary">
+            <Workflow className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-xs font-semibold">Call sequence</p>
+            <p className="truncate text-2xs text-muted-foreground">Execution order from entry point through resolved calls</p>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <Badge variant="secondary">{workflow.steps.length} steps</Badge>
+          <Badge variant="outline">{files.size} files</Badge>
         </div>
       </div>
 
-      <div className="rounded-xl border border-border bg-surface/60">
-        <ol className="divide-y divide-border/50">
+      <div className="relative">
+        <div aria-hidden="true" className="absolute bottom-5 left-[13px] top-5 w-px bg-gradient-to-b from-primary/50 via-border to-transparent" />
+        <ol className="relative space-y-2.5">
           {workflow.steps.map((step, index) => {
-            const path = step.file_path ?? "(unknown)";
-            const column = columnOf(path);
             const previous = index > 0 ? workflow.steps[index - 1] : null;
-            const previousColumn = previous ? columnOf(previous.file_path) : 0;
-            const direction = previous ? Math.sign(column - previousColumn) : 0;
             const meta = kindMeta(step.kind);
+            const fileChanged = Boolean(previous?.file_path && step.file_path && previous.file_path !== step.file_path);
 
             return (
-              <li key={step.id} className="px-3 py-2.5">
-                {direction !== 0 ? (
-                  <div className="mb-2 flex items-center gap-1.5 pl-1 text-2xs text-muted-foreground">
-                    {direction > 0 ? <ArrowRight className="size-3 text-primary" /> : <ArrowLeft className="size-3 text-primary" />}
-                    calls into <span className="mono">{basename(path)}</span>
-                  </div>
-                ) : null}
+              <li key={step.id} className="flex gap-3">
+                <span
+                  className={cn(
+                    "z-10 flex size-7 shrink-0 items-center justify-center rounded-full border text-2xs font-semibold tabular-nums shadow-sm",
+                    index === 0
+                      ? "border-primary/40 bg-primary/15 text-primary"
+                      : "border-border bg-surface-raised text-muted-foreground",
+                  )}
+                >
+                  {index + 1}
+                </span>
 
-                <div className="overflow-x-auto scrollbar-thin">
-                  <div className="flex min-w-full gap-2">
-                    {files.map((file) => (
-                      <div key={file} className="min-w-[10.5rem] flex-1">
-                        {file === path ? (
-                          <button
-                            type="button"
-                            onClick={() => step.file_path && open(step.file_path, step.line)}
-                            className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-left transition-colors hover:border-primary/50"
-                          >
-                            <span className="flex items-center gap-2">
-                              <span
-                                className={cn(
-                                  "flex size-5 items-center justify-center rounded-full border border-border text-[0.625rem] font-semibold",
-                                  meta.tone,
-                                )}
-                              >
-                                {index + 1}
-                              </span>
-                              <span className={cn("text-2xs font-medium uppercase tracking-wider", meta.tone)}>{meta.label}</span>
-                            </span>
-                            <span className="mt-1 block text-xs font-medium leading-snug">{step.label}</span>
-                            {step.symbol ? <span className="mono mt-0.5 block truncate text-2xs text-muted-foreground">{step.symbol}()</span> : null}
-                            {step.detail ? <span className="mt-0.5 block text-2xs text-muted-foreground">{step.detail}</span> : null}
-                          </button>
-                        ) : (
-                          <div className="h-full rounded-lg border border-dashed border-border/40" />
-                        )}
-                      </div>
-                    ))}
+                <div className="min-w-0 flex-1 rounded-xl border border-border/80 bg-surface/65 px-3.5 py-3 transition-colors hover:border-primary/30">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline" className={cn("font-medium", meta.tone)}>
+                      {meta.label}
+                    </Badge>
+                    {step.symbol ? <span className="mono truncate text-2xs text-muted-foreground">{step.symbol}()</span> : null}
+                    {fileChanged && previous?.file_path ? (
+                      <span className="ml-auto inline-flex items-center gap-1 text-2xs text-muted-foreground">
+                        <ArrowDownRight className="size-3 text-primary" /> from {basename(previous.file_path)}
+                      </span>
+                    ) : null}
                   </div>
+
+                  <p className="mt-1.5 text-xs font-medium leading-snug">{step.label}</p>
+                  {step.detail ? <p className="mt-1 text-2xs leading-relaxed text-muted-foreground">{step.detail}</p> : null}
+                  {step.evidence && step.evidence !== step.detail ? (
+                    <p className="mt-1 line-clamp-2 text-2xs leading-relaxed text-muted-foreground/75">{step.evidence}</p>
+                  ) : null}
+
+                  {step.file_path ? (
+                    <div className="mt-2">
+                      <PathLink path={step.file_path} line={step.line} compact />
+                    </div>
+                  ) : (
+                    <span className="mt-2 block text-2xs text-muted-foreground/60">Source file not resolved</span>
+                  )}
                 </div>
               </li>
             );
@@ -160,12 +105,11 @@ export function SequenceView({ workflow }: { workflow: Workflow }) {
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-2xs text-muted-foreground">
         <span className="flex items-center gap-1.5">
-          <CircleChevronDown className="size-3" /> Steps are ordered as the tracer walked the call graph.
+          <CircleChevronDown className="size-3" /> Steps follow the order the tracer walked the call graph.
         </span>
         {workflow.trace_truncated ? (
           <span className="text-amber-300">Trace truncated at the configured depth — deeper calls are not shown.</span>
         ) : null}
-        {workflow.steps[0]?.file_path ? <PathLink path={workflow.steps[0].file_path} label="Open entry file" compact /> : null}
       </div>
     </div>
   );

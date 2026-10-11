@@ -41,7 +41,7 @@ function LayerNode({ data }: NodeProps<Node<LayerNodeData>>) {
   return (
     <div
       onClick={() => data.onSelect(data.id)}
-      style={{ borderColor: data.selected ? color : undefined, boxShadow: data.selected ? `0 0 0 1px ${color}55, 0 12px 40px -18px ${color}` : undefined }}
+      style={{ borderColor: data.selected ? color : undefined, boxShadow: data.selected ? `0 0 0 1px color-mix(in srgb, ${color} 42%, transparent), 0 12px 40px -18px ${color}` : undefined }}
       className={cn(
         "w-[15.5rem] cursor-pointer rounded-xl border bg-surface/95 p-3.5 backdrop-blur transition-all hover:border-primary/50",
         data.selected ? "border-transparent" : "border-border",
@@ -126,9 +126,9 @@ function layout(graph: ArchitectureGraph): { nodes: Node<LayerNodeData>[]; edges
     target: edge.target,
     animated: false,
     label: String(edge.weight),
-    labelStyle: { fill: "#94a3b8", fontSize: 10 },
-    labelBgStyle: { fill: "#11141a" },
-    style: { stroke: "#334155", strokeWidth: Math.min(1 + Math.log2(edge.weight + 1), 4) },
+    labelStyle: { fill: "hsl(var(--muted-foreground))", fontSize: 10 },
+    labelBgStyle: { fill: "hsl(var(--surface))" },
+    style: { stroke: "hsl(var(--border))", strokeWidth: Math.min(1 + Math.log2(edge.weight + 1), 4) },
     data: edge,
   }));
 
@@ -170,14 +170,14 @@ export function ArchitectureFlow({ graph }: { graph: ArchitectureGraph }) {
             proOptions={{ hideAttribution: true }}
             className="bg-transparent"
           >
-            <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="hsl(220 12% 22%)" />
+            <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="hsl(var(--border))" />
             <Controls showInteractive={false} className="!bottom-3 !left-3" />
             <MiniMap
               pannable
               zoomable
               className="!bottom-3 !right-3 !h-24 !w-36 !rounded-lg !border !border-border"
               nodeColor={(node) => layerColor(node.id as string)}
-              maskColor="hsl(220 14% 6% / 0.7)"
+              maskColor="hsl(var(--background) / 0.72)"
             />
           </ReactFlow>
         </ReactFlowProvider>

@@ -79,7 +79,7 @@ export function Erd({
       <svg width={width} height={height} className="min-w-full">
         <defs>
           <marker id="erd-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b" />
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="hsl(var(--muted-foreground))" />
           </marker>
         </defs>
 
@@ -97,13 +97,13 @@ export function Erd({
               <path
                 d={`M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`}
                 fill="none"
-                stroke="#475569"
+                stroke="hsl(var(--border))"
                 strokeDasharray={relation.resolved ? undefined : "4 3"}
                 strokeWidth={1.4}
                 markerEnd="url(#erd-arrow)"
               />
               {relation.field ? (
-                <text x={midX} y={(y1 + y2) / 2 - 4} textAnchor="middle" fontSize="9" fill="#94a3b8">
+                <text x={midX} y={(y1 + y2) / 2 - 4} textAnchor="middle" fontSize="9" fill="hsl(var(--muted-foreground))">
                   {relation.field}
                 </text>
               ) : null}
@@ -122,31 +122,31 @@ export function Erd({
                 width={box.w}
                 height={box.h}
                 rx={10}
-                fill={active ? "#141b2b" : "#0f1319"}
-                stroke={active ? "#22d3ee" : "#232a36"}
+                fill={active ? "hsl(var(--primary) / 0.08)" : "hsl(var(--surface))"}
+                stroke={active ? "hsl(var(--primary))" : "hsl(var(--border))"}
                 strokeWidth={active ? 1.6 : 1}
               />
-              <rect x={box.x} y={box.y} width={box.w} height={HEADER_H} rx={10} fill={active ? "#0e2233" : "#151a22"} />
-              <text x={box.x + 12} y={box.y + 19} fontSize="12" fontWeight="600" fill={active ? "#67e8f9" : "#e2e8f0"}>
+              <rect x={box.x} y={box.y} width={box.w} height={HEADER_H} rx={10} fill={active ? "hsl(var(--primary) / 0.12)" : "hsl(var(--surface-raised))"} />
+              <text x={box.x + 12} y={box.y + 19} fontSize="12" fontWeight="600" fill={active ? "hsl(var(--primary))" : "hsl(var(--foreground))"}>
                 {box.model.name}
               </text>
-              <text x={box.x + box.w - 12} y={box.y + 19} fontSize="9" textAnchor="end" fill="#7c8798">
+              <text x={box.x + box.w - 12} y={box.y + 19} fontSize="9" textAnchor="end" fill="hsl(var(--muted-foreground))">
                 {box.model.table ?? box.model.orm ?? ""}
               </text>
 
               {shown.map((field, index) => (
                 <g key={field.name}>
-                  <text x={box.x + 12} y={box.y + HEADER_H + 12 + index * ROW_H} fontSize="10" fill={field.primary_key ? "#fbbf24" : "#cbd5e1"}>
+                  <text x={box.x + 12} y={box.y + HEADER_H + 12 + index * ROW_H} fontSize="10" fill={field.primary_key ? "hsl(var(--layer-middleware))" : "hsl(var(--foreground))"}>
                     {field.primary_key ? "PK " : field.foreign_key ? "FK " : "   "}
                     {field.name}
                   </text>
-                  <text x={box.x + box.w - 12} y={box.y + HEADER_H + 12 + index * ROW_H} fontSize="9.5" textAnchor="end" fill="#7c8798">
+                  <text x={box.x + box.w - 12} y={box.y + HEADER_H + 12 + index * ROW_H} fontSize="9.5" textAnchor="end" fill="hsl(var(--muted-foreground))">
                     {(field.type ?? "").slice(0, 22)}
                   </text>
                 </g>
               ))}
               {box.model.fields.length > MAX_ROWS ? (
-                <text x={box.x + 12} y={box.y + HEADER_H + 12 + MAX_ROWS * ROW_H} fontSize="9.5" fill="#7c8798">
+                <text x={box.x + 12} y={box.y + HEADER_H + 12 + MAX_ROWS * ROW_H} fontSize="9.5" fill="hsl(var(--muted-foreground))">
                   +{box.model.fields.length - MAX_ROWS} more fields…
                 </text>
               ) : null}
