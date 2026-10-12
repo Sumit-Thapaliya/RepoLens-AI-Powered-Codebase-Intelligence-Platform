@@ -6,6 +6,7 @@ import asyncio
 import json
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -20,7 +21,7 @@ for source_path in (
     sys.path.insert(0, str(source_path))
 
 from app.core.config import Settings
-from app.services.rag import RagService, build_chat_messages, select_rag_chunks
+from app.services.rag import RagService, _index_expired, build_chat_messages, select_rag_chunks
 
 
 class RagServiceTests(unittest.TestCase):
@@ -54,6 +55,21 @@ class RagServiceTests(unittest.TestCase):
         self.assertNotIn(api_key, repr(settings))
         self.assertNotIn(database_url, repr(settings.public_config()))
         self.assertNotIn(api_key, repr(settings.public_config()))
+
+    def test_rag_chunk_ttl_defaults_to_24_hours_and_is_bounded(self) -> None:
+        settings = Settings(_env_file=None)
+        self.assertEqual(settings.rag_chunk_ttl_hours, 24)
+        with self.assertRaises(ValueError):
+            Settings(_env_file=None, RAG_CHUNK_TTL_HOURS=0)
+        with self.assertRaises(ValueError):
+            Settings(_env_file=None, RAG_CHUNK_TTL_HOURS=8_761)
+
+    def test_index_expiration_uses_utc_and_exact_ttl_boundary(self) -> None:
+        now = datetime(2026, 10, 11, 12, tzinfo=timezone.utc)
+        self.assertTrue(_index_expired(now - timedelta(hours=24), 24, now=now))
+        self.assertFalse(_index_expired(now - timedelta(hours=24) + timedelta(seconds=1), 24, now=now))
+        self.assertTrue(_index_expired(None, 24, now=now))
+        self.assertTrue(_index_expired("not-a-timestamp", 24, now=now))
 
     def test_chunk_selection_is_capped_diverse_and_path_safe(self) -> None:
         source = [
@@ -145,6 +161,129 @@ class RagServiceTests(unittest.TestCase):
         self.assertIsNone(service._read_index("owner/repo", "a" * 40))
         self.assertTrue(connection.closed)
         self.assertFalse(connection.rollback_called)
+
+    def test_expiry_cleanup_only_deletes_chunk_rows(self) -> None:
+        class Cursor:
+            rowcount = 7
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, params):
+                self.query = query
+                self.params = params
+
+        class Connection:
+            def __init__(self):
+                self.cursor_instance = Cursor()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def cursor(self):
+                return self.cursor_instance
+
+        settings = Settings(
+            _env_file=None,
+            RAG_DATABASE_URL="postgresql://user:pass@example.neon.tech/db",
+        )
+        service = RagService(settings)
+        connection = Connection()
+        service._database_connection = lambda: connection  # type: ignore[method-assign]
+
+        deleted = service.delete_expired_chunks()
+
+        self.assertEqual(deleted, 7)
+        self.assertIn("DELETE FROM repolens_rag_chunks", connection.cursor_instance.query)
+        self.assertNotIn("repolens_rag_indexes", connection.cursor_instance.query)
+        self.assertEqual(connection.cursor_instance.params, (24,))
+
+    def test_expired_status_keeps_index_metadata_but_disables_chat(self) -> None:
+        settings = Settings(
+            _env_file=None,
+            RAG_DATABASE_URL="postgresql://user:pass@example.neon.tech/db",
+            RAG_API_KEY="provider-secret",
+        )
+        service = RagService(settings)
+        service.delete_expired_chunks = lambda: 0  # type: ignore[method-assign]
+        service._read_index = lambda *_args: {  # type: ignore[method-assign]
+            "chunk_count": 42,
+            "file_count": 9,
+            "embedding_model": settings.rag_embedding_model,
+            "embedding_dimensions": settings.rag_embedding_dimensions,
+            "indexed_at": "2026-10-10T00:00:00+00:00",
+            "chunks_expired": True,
+        }
+
+        status = asyncio.run(service.status("owner/repo", "a" * 40))
+
+        self.assertFalse(status["indexed"])
+        self.assertEqual(status["chunk_count"], 42)
+        self.assertEqual(status["file_count"], 9)
+        self.assertIn("expired", status["message"])
+
+    def test_index_replacement_keeps_metadata_rows(self) -> None:
+        class Cursor:
+            def __init__(self):
+                self.queries: list[str] = []
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, query, _params=()):
+                self.queries.append(query)
+
+            def executemany(self, query, _rows):
+                self.queries.append(query)
+
+        class Connection:
+            def __init__(self):
+                self.cursor_instance = Cursor()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def cursor(self):
+                return self.cursor_instance
+
+        settings = Settings(
+            _env_file=None,
+            RAG_DATABASE_URL="postgresql://user:pass@example.neon.tech/db",
+            RAG_API_KEY="provider-secret",
+            RAG_EMBEDDING_DIMENSIONS=8,
+        )
+        service = RagService(settings)
+        connection = Connection()
+        service._database_connection = lambda: connection  # type: ignore[method-assign]
+        service._create_schema = lambda _cursor: None  # type: ignore[method-assign]
+        chunks = [{
+            "id": "src/main.py:1",
+            "path": "src/main.py",
+            "symbol": None,
+            "kind": "file",
+            "start_line": 1,
+            "end_line": 4,
+            "text": "source excerpt",
+        }]
+
+        service._persist_index("owner/repo", "a" * 40, chunks, [[0.1] * 8])
+
+        queries = connection.cursor_instance.queries
+        self.assertTrue(any("DELETE FROM repolens_rag_chunks" in query for query in queries))
+        self.assertTrue(any("INSERT INTO repolens_rag_indexes" in query for query in queries))
+        self.assertFalse(any("DELETE FROM repolens_rag_indexes" in query for query in queries))
 
     def test_embedding_requests_use_server_key_and_validate_provider_dimensions(self) -> None:
         token = "server-only-rag-token"
