@@ -14,7 +14,6 @@ const nextConfig = {
   async rewrites() {
     return [{ source: "/backend/:path*", destination: `${API_INTERNAL_URL}/api/:path*` }];
   },
-  eslint: { ignoreDuringBuilds: true },
   // The sandbox this was developed in has ~2 GB RAM: memory optimisations keep
   // `next build` inside that budget.
   experimental: { webpackMemoryOptimizations: true },

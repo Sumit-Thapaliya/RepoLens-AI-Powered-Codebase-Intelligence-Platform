@@ -20,6 +20,8 @@ services:
         value: "1"
       - key: MAX_ACTIVE_ANALYSES_PER_SESSION
         value: "1"
+      - key: MAX_PENDING_ANALYSES
+        value: "10"
       # The browser calls the same-origin web proxy; direct cross-origin API calls are unused.
       - key: CORS_ORIGINS
         value: ""

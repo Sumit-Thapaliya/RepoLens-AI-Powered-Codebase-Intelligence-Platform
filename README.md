@@ -205,6 +205,7 @@ never belongs in browser code and does not enable private-repository access.
 | `MAX_FILES` / `MAX_FILE_BYTES` | `4000` / `1048576` | Maximum indexed text files and per-file size threshold |
 | `MAX_ACTIVE_ANALYSES_PER_SESSION` | `2` | Limit concurrent jobs per browser session |
 | `MAX_ANALYSES_PER_HOUR` | `20` | Limit job submissions per browser session |
+| `MAX_PENDING_ANALYSES` | `20` | Bound running, queued, and submitting jobs across this API process |
 | `WINDOW_TTL_SECONDS` / `WINDOW_SWEEP_SECONDS` | `1800` / `30` | Idle lease expiry and cleanup interval |
 | `SESSION_TTL_SECONDS` | `2592000` | Sliding lifetime for the HttpOnly browser session |
 | `STORE_SOURCE_SNIPPETS` | `false` | Keep short keyword-search excerpts in RAM until analysis expiry |
@@ -227,7 +228,7 @@ never belongs in browser code and does not enable private-repository access.
 
 From the repository root, run `python -m unittest discover -s apps/api/tests -v` for local HTTP
 lifecycle, expiry, restart, process-local concurrency, a complete fixture-repository analysis, and
-bounded chunk-memory checks. From `apps/web`, run `npm run typecheck` and `npm run build` to validate
+bounded chunk-memory checks. From `apps/web`, run `npm run lint`, `npm run typecheck` and `npm run build` to validate
 the frontend.
 
 ## API reference

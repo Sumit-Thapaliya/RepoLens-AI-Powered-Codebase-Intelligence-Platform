@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -31,6 +32,7 @@ from app.core import db
 from app.models.tables import Analysis, AnalysisWindow, Base, BrowserSession, ChunkRecord, FileRecord, Repo
 from app.services import analysis as analysis_service
 from app.services.analysis import AnalysisManager
+from app.services.github import read_source_files
 from app.services.windows import expire_windows
 from repolens_parser import analyze_source
 from repolens_shared.schemas import Branch, RepoMetadata, RepoRef
@@ -354,6 +356,60 @@ class ProcessLocalConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(peak, 2)
         self.assertEqual(manager.in_flight(), [])
         self.assertEqual(manager._cancel_events, {})
+
+    async def test_pending_limit_rejects_overflow_and_releases_failed_reservation(self) -> None:
+        settings = db.get_settings().model_copy(update={"max_pending_analyses": 1})
+        self.assertEqual(settings.public_config()["limits"]["max_pending_analyses"], 1)
+        manager = AnalysisManager(settings)
+        active_task = asyncio.create_task(asyncio.sleep(10))
+        manager._tasks["already-pending"] = active_task
+        try:
+            with patch("app.services.analysis.GitHubClient") as github_client:
+                with self.assertRaises(HTTPException) as raised:
+                    await manager.create_run("https://github.com/owner/project")
+                self.assertEqual(raised.exception.status_code, 429)
+                github_client.assert_not_called()
+
+            manager._tasks.pop("already-pending")
+
+            class FailingGitHubClient:
+                def __init__(self, *_args, **_kwargs):
+                    pass
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *_args):
+                    return None
+
+                async def resolve(self, _url):
+                    raise RuntimeError("simulated upstream failure")
+
+            with patch("app.services.analysis.GitHubClient", FailingGitHubClient):
+                with self.assertRaisesRegex(RuntimeError, "simulated upstream failure"):
+                    await manager.create_run("https://github.com/owner/project")
+            self.assertEqual(manager._admission_reservations, 0)
+        finally:
+            active_task.cancel()
+            await asyncio.gather(active_task, return_exceptions=True)
+
+
+class SymlinkSafetyTests(unittest.TestCase):
+    def test_source_reader_skips_symlinks_outside_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            base = Path(temp_dir)
+            root = base / "checkout"
+            root.mkdir()
+            outside = base / "outside.py"
+            outside.write_text("private filesystem content", encoding="utf-8")
+            link = root / "linked.py"
+            try:
+                link.symlink_to(outside)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"symlinks are unavailable in this environment: {exc}")
+
+            files = list(read_source_files(root, 1024, 10, set(), ()))
+            self.assertEqual(files, [])
 
 
 class ChunkMemoryTests(unittest.TestCase):

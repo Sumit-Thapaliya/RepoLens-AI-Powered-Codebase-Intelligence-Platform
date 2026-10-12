@@ -27,7 +27,6 @@ import { ApiError, getFile, getFileTree, getSymbolReferences, getSymbols } from 
 import type { FileNode, FilePayload, SymbolInfo } from "@/lib/types";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
 import { useApi } from "@/lib/hooks";
-import { cn } from "@/lib/utils";
 
 function SymbolJump({
   analysisId,

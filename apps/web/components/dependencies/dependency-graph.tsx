@@ -96,14 +96,12 @@ export function DependencyGraph({
   moduleView,
   selectedId,
   onSelect,
-  onOpenFile,
   searchTerm,
 }: {
   payload: DependenciesPayload;
   moduleView: boolean;
   selectedId: string | null;
   onSelect: (node: GraphNode | null) => void;
-  onOpenFile: (path: string) => void;
   searchTerm: string;
 }) {
   const nodes = React.useMemo(() => layoutNodes(payload.nodes, moduleView), [payload.nodes, moduleView]);

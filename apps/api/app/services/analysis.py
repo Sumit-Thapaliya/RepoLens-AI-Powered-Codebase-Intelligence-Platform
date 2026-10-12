@@ -14,6 +14,7 @@ import logging
 import threading
 import time
 
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from repolens_shared.errors import RepoLensError
@@ -36,6 +37,8 @@ class AnalysisManager:
         self._tasks: dict[str, asyncio.Task] = {}
         self._cancel_events: dict[str, threading.Event] = {}
         self._semaphore: asyncio.Semaphore | None = None
+        self._admission_lock = threading.Lock()
+        self._admission_reservations = 0
 
     # ------------------------------------------------------------- lifecycle
     @property
@@ -47,10 +50,37 @@ class AnalysisManager:
     def in_flight(self) -> list[str]:
         return [analysis_id for analysis_id, task in self._tasks.items() if not task.done()]
 
+    def _reserve_pending_slot(self) -> None:
+        """Atomically bound running, queued, and currently-submitting work."""
+        limit = self.settings.max_pending_analyses
+        with self._admission_lock:
+            pending = len(self.in_flight()) + self._admission_reservations
+            if pending >= limit:
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"The analysis queue is full ({limit} pending jobs). Please retry later.",
+                    headers={"Retry-After": "30"},
+                )
+            self._admission_reservations += 1
+
+    def _release_pending_slot(self) -> None:
+        with self._admission_lock:
+            if self._admission_reservations:
+                self._admission_reservations -= 1
+
     # ----------------------------------------------------------------- create
     async def create_run(self, url: str, branch: str | None = None, force: bool = False,
                          owner_session_id: str | None = None) -> dict:
-        """Resolve the repository, persist metadata and enqueue an analysis.
+        """Reserve bounded process queue capacity before any upstream GitHub requests."""
+        self._reserve_pending_slot()
+        try:
+            return await self._create_run_reserved(url, branch, force, owner_session_id)
+        finally:
+            self._release_pending_slot()
+
+    async def _create_run_reserved(self, url: str, branch: str | None = None, force: bool = False,
+                                   owner_session_id: str | None = None) -> dict:
+        """Resolve a public repository, persist metadata and enqueue an analysis.
 
         An active run is reusable only by the same authenticated session; two users
         never join the same analysis just because they requested the same repository.

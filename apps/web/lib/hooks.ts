@@ -1,6 +1,5 @@
 "use client";
 
-import * as React from "react";
 import useSWR, { type SWRResponse } from "swr";
 import { ApiError } from "./api";
 

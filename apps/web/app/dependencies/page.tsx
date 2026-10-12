@@ -181,12 +181,11 @@ function DependenciesBody() {
             moduleView={view === "modules"}
             selectedId={selected?.id ?? null}
             onSelect={setSelected}
-            onOpenFile={openFile}
             searchTerm={searchTerm}
           />
           <InlineNote>
             Solid arrows are imports, dashed arrows are resolved calls. Layout groups files by architectural layer and is
-            stable across reloads; edges come from the parser's resolver, not from naming guesses.
+            stable across reloads; edges come from the parser&apos;s resolver, not from naming guesses.
           </InlineNote>
         </div>
 
@@ -202,7 +201,7 @@ function DependenciesBody() {
             </div>
             {cycles.length === 0 ? (
               <p className="p-4 text-2xs text-muted-foreground">
-                No import cycle was found. Cycles are detected with Tarjan's algorithm on the resolved import graph.
+                No import cycle was found. Cycles are detected with Tarjan&apos;s algorithm on the resolved import graph.
               </p>
             ) : (
               <ul className="max-h-56 divide-y divide-border overflow-y-auto scrollbar-thin">

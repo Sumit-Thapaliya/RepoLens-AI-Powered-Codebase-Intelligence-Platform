@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     max_repo_bytes: int = Field(default=104_857_600, alias="MAX_REPO_BYTES")
     max_analysis_seconds: int = Field(default=1800, alias="MAX_ANALYSIS_SECONDS")
     analysis_workers: int = Field(default=2, alias="ANALYSIS_WORKERS")
+    max_pending_analyses: int = Field(default=20, alias="MAX_PENDING_ANALYSES")
     max_active_analyses_per_session: int = Field(default=2, alias="MAX_ACTIVE_ANALYSES_PER_SESSION")
     max_analyses_per_hour: int = Field(default=20, alias="MAX_ANALYSES_PER_HOUR")
 
@@ -173,6 +174,7 @@ class Settings(BaseSettings):
         "max_file_bytes",
         "max_analysis_seconds",
         "analysis_workers",
+        "max_pending_analyses",
         "max_active_analyses_per_session",
         "max_analyses_per_hour",
         "window_ttl_seconds",
@@ -230,6 +232,7 @@ class Settings(BaseSettings):
                 "max_analysis_seconds": self.max_analysis_seconds,
                 "max_active_analyses_per_session": self.max_active_analyses_per_session,
                 "max_analyses_per_hour": self.max_analyses_per_hour,
+                "max_pending_analyses": self.max_pending_analyses,
                 "analysis_workers": self.analysis_workers,
                 "window_ttl_seconds": self.window_ttl_seconds,
                 "window_sweep_seconds": self.window_sweep_seconds,

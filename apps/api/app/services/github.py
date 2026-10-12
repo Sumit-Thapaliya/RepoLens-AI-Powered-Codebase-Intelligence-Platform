@@ -338,7 +338,9 @@ def read_source_files(root: Path, max_file_bytes: int, max_files: int,
     for path in sorted(root.rglob("*")):
         if count >= max_files:
             return
-        if not path.is_file():
+        # Do not follow symlinks from a repository checkout: in the optional
+        # uncapped git-clone fallback they could point outside the workspace.
+        if path.is_symlink() or not path.is_file():
             continue
         parts = path.relative_to(root).parts
         if any(part in ignored_dirs for part in parts[:-1]):
@@ -371,6 +373,8 @@ def read_source_files(root: Path, max_file_bytes: int, max_files: int,
 def clone_dir_size(path: Path) -> int:
     total = 0
     for item in path.rglob("*"):
+        if item.is_symlink():
+            continue
         if item.is_file():
             try:
                 total += item.stat().st_size

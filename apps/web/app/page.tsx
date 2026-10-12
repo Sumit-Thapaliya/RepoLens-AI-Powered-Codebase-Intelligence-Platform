@@ -28,10 +28,6 @@ import { useApi } from "@/lib/hooks";
 import { formatNumber } from "@/lib/utils";
 import { useAnalysisContext } from "@/components/providers/analysis-provider";
 
-function Section({ children, className = "" }: { children: React.ReactNode; className?: string }) {
-  return <div className={className}>{children}</div>;
-}
-
 function OverviewBody() {
   const { analysisId, analysis } = useAnalysisContext();
   const { data, error, isLoading, mutate } = useApi(
