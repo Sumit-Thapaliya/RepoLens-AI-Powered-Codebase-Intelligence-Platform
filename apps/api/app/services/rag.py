@@ -7,7 +7,7 @@ import logging
 import math
 import re
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable
 
 import httpx
@@ -18,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 RAG_CHUNKS_TABLE = "repolens_rag_chunks"
 RAG_INDEXES_TABLE = "repolens_rag_indexes"
-RAG_RETAINED_COMMITS = 2
 _EMBED_BATCH_SIZE = 48
 _REPO_PART_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 _COMMIT_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
@@ -166,6 +165,23 @@ def _vector_literal(values: list[float]) -> str:
     return "[" + ",".join(format(float(value), ".9g") for value in values) + "]"
 
 
+def _index_expired(indexed_at: datetime | str | None, ttl_hours: int, *, now: datetime | None = None) -> bool:
+    """Whether the excerpt payload for an index is past its configured lifetime."""
+    if indexed_at is None:
+        return True
+    if isinstance(indexed_at, str):
+        try:
+            indexed_at = datetime.fromisoformat(indexed_at.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+    if indexed_at.tzinfo is None:
+        indexed_at = indexed_at.replace(tzinfo=timezone.utc)
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return indexed_at + timedelta(hours=ttl_hours) <= current
+
+
 class RagService:
     """Thin async wrapper over an OpenAI-compatible API and a Neon pgvector store."""
 
@@ -200,6 +216,7 @@ class RagService:
         self._require_configured()
         repo_key = _repo_key(full_name)
         commit = _clean_commit(commit_sha)
+        await asyncio.to_thread(self.delete_expired_chunks)
         selected = select_rag_chunks(
             chunks,
             limit=self.settings.rag_index_max_chunks,
@@ -248,6 +265,7 @@ class RagService:
         if not commit_sha:
             return {**base, "message": "The analysis has no resolved commit SHA, so it cannot be indexed."}
         try:
+            await asyncio.to_thread(self.delete_expired_chunks)
             row = await asyncio.to_thread(self._read_index, _repo_key(full_name), _clean_commit(commit_sha))
         except RagServiceError:
             raise
@@ -260,6 +278,18 @@ class RagService:
             }
         if row is None:
             return {**base, "storage_available": True, "message": "This commit has not been indexed for AI chat yet."}
+        if row["chunks_expired"]:
+            return {
+                **base,
+                "chunk_count": row["chunk_count"],
+                "file_count": row["file_count"],
+                "indexed_at": row["indexed_at"],
+                "storage_available": True,
+                "message": (
+                    f"This commit's source excerpts expired after {self.settings.rag_chunk_ttl_hours} hours. "
+                    "Run a fresh analysis to rebuild its chat index."
+                ),
+            }
 
         model_matches = (
             row["embedding_model"] == self.settings.rag_embedding_model
@@ -287,6 +317,7 @@ class RagService:
         repo_key = _repo_key(full_name)
         commit = _clean_commit(commit_sha)
         try:
+            await asyncio.to_thread(self.delete_expired_chunks)
             index = await asyncio.to_thread(self._read_index, repo_key, commit)
         except RagServiceError:
             raise
@@ -295,6 +326,11 @@ class RagService:
             raise RagStorageFailure("Persistent chat storage is temporarily unavailable.") from exc
         if index is None:
             raise RagIndexMissing("This commit has no AI chat index yet. Re-run analysis after RAG is configured.")
+        if index["chunks_expired"]:
+            raise RagIndexMissing(
+                f"This commit's source excerpts expired after {self.settings.rag_chunk_ttl_hours} hours. "
+                "Run a fresh analysis to rebuild its chat index."
+            )
         if (
             index["embedding_model"] != self.settings.rag_embedding_model
             or index["embedding_dimensions"] != self.settings.rag_embedding_dimensions
@@ -434,6 +470,26 @@ class RagService:
             dsn += ("&" if "?" in dsn else "?") + "sslmode=require"
         return psycopg.connect(dsn, connect_timeout=8)
 
+    def delete_expired_chunks(self) -> int:
+        """Purge expired source text and vectors while retaining index metadata."""
+        if not self.settings.rag_database_url:
+            return 0
+        try:
+            with self._database_connection() as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        f"DELETE FROM {RAG_CHUNKS_TABLE} "
+                        "WHERE indexed_at < NOW() - (%s * INTERVAL '1 hour')",
+                        (self.settings.rag_chunk_ttl_hours,),
+                    )
+                    return int(cursor.rowcount or 0)
+        except Exception as exc:
+            if getattr(exc, "sqlstate", None) == "42P01":
+                # Before the first successful RAG index there is no chunk table to clean.
+                return 0
+            logger.warning("Neon RAG chunk cleanup failed (%s)", type(exc).__name__)
+            raise RagStorageFailure("Expired chat excerpts could not be cleaned from Neon.") from exc
+
     def _create_schema(self, cursor) -> None:
         cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
         cursor.execute(f"""
@@ -469,6 +525,10 @@ class RagService:
         cursor.execute(f"""
             CREATE INDEX IF NOT EXISTS repolens_rag_repo_lookup
             ON {RAG_CHUNKS_TABLE} (repo_key, commit_sha)
+        """)
+        cursor.execute(f"""
+            CREATE INDEX IF NOT EXISTS repolens_rag_chunk_expiry
+            ON {RAG_CHUNKS_TABLE} (indexed_at)
         """)
 
     def _persist_index(self, repo_key: str, commit: str, chunks: list[dict], vectors: list[list[float]]) -> None:
@@ -510,24 +570,7 @@ class RagService:
                         repo_key, commit, len(chunks), len({chunk["path"] for chunk in chunks}),
                         self.settings.rag_embedding_model, self.settings.rag_embedding_dimensions,
                     ))
-                    # Retain this commit and the previous indexed commit for each public repo.
-                    cursor.execute(f"""
-                        DELETE FROM {RAG_CHUNKS_TABLE}
-                        WHERE repo_key = %s AND commit_sha IN (
-                            SELECT commit_sha FROM {RAG_INDEXES_TABLE}
-                            WHERE repo_key = %s AND commit_sha <> %s
-                            ORDER BY indexed_at DESC OFFSET %s
-                        )
-                    """, (repo_key, repo_key, commit, RAG_RETAINED_COMMITS - 1))
-                    cursor.execute(f"""
-                        DELETE FROM {RAG_INDEXES_TABLE}
-                        WHERE repo_key = %s AND commit_sha <> %s
-                          AND commit_sha NOT IN (
-                            SELECT commit_sha FROM {RAG_INDEXES_TABLE}
-                            WHERE repo_key = %s
-                            ORDER BY indexed_at DESC LIMIT %s
-                          )
-                    """, (repo_key, commit, repo_key, RAG_RETAINED_COMMITS))
+                    # Keep the small metadata row permanently; chunk rows expire separately.
         except RagServiceError:
             raise
         except Exception as exc:
@@ -552,6 +595,7 @@ class RagService:
                         "embedding_model": str(row[2]),
                         "embedding_dimensions": int(row[3]),
                         "indexed_at": row[4].isoformat() if row[4] else None,
+                        "chunks_expired": _index_expired(row[4], self.settings.rag_chunk_ttl_hours),
                     }
         except RagServiceError:
             raise

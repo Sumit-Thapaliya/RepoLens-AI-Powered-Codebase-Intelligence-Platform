@@ -34,7 +34,7 @@ ungraceful restart.
 * **Session isolation.** The server issues an opaque `HttpOnly` cookie; only its SHA-256 digest is stored. Analysis leases are bound to that session and a browser tab. Caller-supplied analysis IDs alone do not grant access.
 * **User-inactivity expiry.** A visible tab heartbeats only while pointer, keyboard, touch or wheel input has occurred within the last heartbeat interval. Background polling and an open-but-idle tab never extend the lease. The server expires results after `WINDOW_TTL_SECONDS` (default 30 minutes) from the last heartbeat (normally within 20 seconds of the last input); expired runs disappear from listings immediately and the sweeper removes their rows within one cleanup interval. The client also clears its local analysis and SWR data at expiry.
 * **Public repositories only.** RepoLens rejects private repositories. GitHub API access is anonymous by default (typically 60 requests per hour per originating IP). An optional server-side `GITHUB_TOKEN` authenticates public-data requests for a higher limit (typically up to 5,000 requests per hour per user); it does not enable private repositories. Never expose the token in browser code.
-* **Source retention.** Full files are not stored with analysis records. Keyword search keeps deduplicated identifier terms by default; the Code Explorer fetches a selected file from GitHub on demand. When RAG is configured, RepoLens stores at most `RAG_INDEX_MAX_CHUNKS` short source excerpts and vectors per public-repository commit in Neon, keeping the latest two indexed commits. Retrieved excerpts plus the user's question and recent tab-local chat turns are sent server-side to the configured OpenAI-compatible provider. Chat history is not saved by RepoLens.
+* **Source retention.** Full files are not stored with analysis records. Keyword search keeps deduplicated identifier terms by default; the Code Explorer fetches a selected file from GitHub on demand. When RAG is configured, RepoLens stores at most `RAG_INDEX_MAX_CHUNKS` short source excerpts and vectors per public-repository commit in Neon. Chunk text and vectors are deleted after `RAG_CHUNK_TTL_HOURS` (24 hours by default); the repository/commit, original counts, model details and indexed timestamp remain in `repolens_rag_indexes`. Cleanup runs on chat/status/index requests and every 15 minutes while the API is active. If the API or Neon compute is asleep, physical deletion can be delayed until it wakes; expired indexes are still treated as unavailable for chat. Retrieved excerpts plus the user's question and recent tab-local chat turns are sent server-side to the configured OpenAI-compatible provider. Chat history is not saved by RepoLens.
 * **Optional AI.** Static analysis, keyword search and impact remain deterministic. AI chat runs only when both `RAG_DATABASE_URL` and `RAG_API_KEY` are configured; otherwise the chat page explains the setup needed and the rest of RepoLens works normally.
 
 ## Dashboard data loading
@@ -71,7 +71,8 @@ docker compose up --build     # web on http://localhost:3000, API on http://loca
 The stack has two services, `api` and `web`. The web server proxies `/backend/*` to the API on the
 internal network, so the browser only talks to one origin. There are no host volumes; source checkouts
 use container-local temporary storage and are removed after each run or on startup. Analysis and session
-results live only in RAM and disappear when the API stops; optional RAG excerpts/vectors persist in Neon.
+results live only in RAM and disappear when the API stops; optional RAG chunk text/vectors expire from Neon
+within 24 hours by default, while compact repository/commit metadata remains.
 RepoLens supports public repositories only. GitHub access is anonymous by default; optionally set
 `GITHUB_TOKEN` on the API service to authenticate public-data requests and raise the GitHub API rate limit.
 Private repositories remain unsupported. For an HTTPS deployment, set `APP_ENV=production` (to enable
@@ -91,12 +92,13 @@ Render dashboard:
 1. `RAG_DATABASE_URL` — the Neon PostgreSQL connection URL (use Neon SSL settings and enable `pgvector`).
 2. `RAG_API_KEY` — a key for an OpenAI-compatible embeddings and chat API.
 3. Optionally set `RAG_API_BASE_URL`, `RAG_CHAT_MODEL`, `RAG_EMBEDDING_MODEL` and
-   `RAG_EMBEDDING_DIMENSIONS` if your provider uses different compatible models.
+   `RAG_EMBEDDING_DIMENSIONS` for provider compatibility, or `RAG_CHUNK_TTL_HOURS` to change the default 24-hour excerpt lifetime.
 
 No secrets are needed to deploy the application; chat remains disabled until both required settings are
 present. Never use `NEXT_PUBLIC_` names for these credentials. After adding them, analyze the repository
-again to build the Neon index for its resolved commit. Reanalysis is safe: the RAG index is replaced for
-that commit, and older entries are pruned to the latest two commits per public repository.
+again to build the Neon index for its resolved commit. Reanalysis is safe: the RAG chunk rows are replaced
+for that commit. Chunk text/vectors expire after 24 hours by default, while repository/commit analysis metadata
+remains in `repolens_rag_indexes`.
 
 ## Features
 
@@ -130,7 +132,7 @@ GitHub URL ──▶ validate + metadata (GitHub API)
             ──▶ quality + insights   complexity, coupling, duplication, missing tests
             ──▶ index for search     symbol, file and doc identifiers (no source excerpts by default)
             ──▶ optional RAG index   capped code/doc excerpts + vectors in Neon pgvector
-            ──▶ store results        analysis artifacts in RAM-only SQLite; RAG retains latest two commits
+            ──▶ store results        analysis artifacts in RAM-only SQLite; RAG chunks expire after 24h, metadata is retained in Neon
 ```
 
 Every stage reports progress and can be cancelled. A run that exceeds `MAX_ANALYSIS_SECONDS` (default
@@ -142,7 +144,7 @@ Every stage reports progress and can be cancelled. A run that exceeds `MAX_ANALY
   graph nodes. `docs/`, `.rst`, Markdown, data and image files are never counted as isolated modules or
   hubs. By default their paths are searchable without retaining body text; setting
   `STORE_SOURCE_SNIPPETS=true` keeps short excerpts in RAM, while configured RAG may persist a capped set of
-  relevant documentation excerpts and vectors in Neon for repository chat.
+  relevant documentation excerpts and vectors in Neon for repository chat, expiring after the configured TTL.
 * **Endpoints are deduplicated by `method + path`.** When the same URL is declared in several files, the
   application's own declaration wins. Other declarations are kept with an `is_example` / `is_test` flag,
   so a library repository reports "33 endpoints, all declared in example or test applications" instead
@@ -211,6 +213,7 @@ never belongs in browser code and does not enable private-repository access.
 | `RAG_CHAT_MODEL` / `RAG_EMBEDDING_MODEL` | `gpt-4o-mini` / `text-embedding-3-small` | Models used for answer generation and vector embeddings |
 | `RAG_EMBEDDING_DIMENSIONS` | `1536` | Embedding size; must match the configured model and provider |
 | `RAG_INDEX_MAX_CHUNKS` / `RAG_CHUNK_MAX_CHARS` | `250` / `3500` | Bound stored source excerpts per commit and each excerpt's maximum length |
+| `RAG_CHUNK_TTL_HOURS` | `24` | Retention for Neon chunk text and vectors; index metadata is retained after chunks expire |
 | `RAG_TOP_K` / `RAG_CONTEXT_MAX_CHARS` | `6` / `18000` | Retrieved excerpts and maximum context sent to chat |
 | `RAG_MAX_HISTORY_MESSAGES` / `RAG_MAX_OUTPUT_TOKENS` | `8` / `800` | Per-tab chat context and answer budget |
 | `RAG_CHAT_REQUESTS_PER_MINUTE` | `12` | Per-session chat request guardrail |
@@ -241,5 +244,5 @@ While the API is running, every endpoint, with request and response shapes, is l
   parsed into symbols and edges. SQL, GraphQL, Proto, YAML/JSON/TOML, Markdown, shell and Dockerfiles are
   not parsed into symbols; paths remain searchable by default, while body text is indexed only when
   `STORE_SOURCE_SNIPPETS=true`.
-* Run one API process/replica. Analysis tasks and the SQLite database are process-local; their results disappear when that process stops. Neon RAG vectors persist separately, but a fresh analysis is still required to restore an expired browser session. Horizontal scaling of analysis workers is outside the current design.
+* Run one API process/replica. Analysis tasks and the SQLite database are process-local; their results disappear when that process stops. Neon chunk text/vectors are retained only for the configured TTL (24 hours by default); repository/commit index metadata remains. Cleanup runs while the API is active and on RAG requests, so a sleeping API or Neon compute can delay physical deletion. A fresh analysis is still required to restore an expired browser session. Horizontal scaling of analysis workers is outside the current design.
 * Not implemented: notifications and pull-request or branch diffing.

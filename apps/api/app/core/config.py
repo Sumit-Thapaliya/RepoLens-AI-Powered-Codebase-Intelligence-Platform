@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     rag_embedding_dimensions: int = Field(default=1536, alias="RAG_EMBEDDING_DIMENSIONS")
     rag_index_max_chunks: int = Field(default=250, alias="RAG_INDEX_MAX_CHUNKS")
     rag_chunk_max_chars: int = Field(default=3500, alias="RAG_CHUNK_MAX_CHARS")
+    rag_chunk_ttl_hours: int = Field(default=24, alias="RAG_CHUNK_TTL_HOURS")
     rag_top_k: int = Field(default=6, alias="RAG_TOP_K")
     rag_context_max_chars: int = Field(default=18000, alias="RAG_CONTEXT_MAX_CHARS")
     rag_max_history_messages: int = Field(default=8, alias="RAG_MAX_HISTORY_MESSAGES")
@@ -116,6 +117,13 @@ class Settings(BaseSettings):
     def _bound_rag_chunk_size(cls, value: int) -> int:
         if value > 12_000:
             raise ValueError("RAG_CHUNK_MAX_CHARS must not exceed 12000")
+        return value
+
+    @field_validator("rag_chunk_ttl_hours")
+    @classmethod
+    def _bound_rag_chunk_ttl(cls, value: int) -> int:
+        if not 1 <= value <= 8_760:
+            raise ValueError("RAG_CHUNK_TTL_HOURS must be between 1 and 8760")
         return value
 
     @field_validator("rag_top_k")

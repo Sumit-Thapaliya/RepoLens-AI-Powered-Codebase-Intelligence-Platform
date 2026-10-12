@@ -17,6 +17,7 @@ from .core.db import init_db
 from .core.errors import install_error_handlers
 from .core.logging import configure_logging
 from .services.analysis import get_manager
+from .services.rag import RagService
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,20 @@ async def _sweep_closed_windows() -> None:
                 logger.info("Discarded %d run(s) from closed windows", len(removed))
         except Exception:
             logger.warning("Window sweep failed", exc_info=True)
+
+
+async def _sweep_expired_rag_chunks() -> None:
+    """Delete Neon source excerpts older than the configured TTL, retaining metadata."""
+    while True:
+        settings = get_settings()
+        if settings.rag_database_url:
+            try:
+                removed = await asyncio.to_thread(RagService(settings).delete_expired_chunks)
+                if removed:
+                    logger.info("Deleted %d expired Neon RAG chunk row(s)", removed)
+            except Exception as exc:
+                logger.warning("Neon RAG expiry sweep failed (%s)", type(exc).__name__)
+        await asyncio.sleep(900)
 
 
 @asynccontextmanager
@@ -50,10 +65,17 @@ async def lifespan(app: FastAPI):
                     "configured" if settings.rag_enabled else "not configured")
     except Exception as exc:
         logger.error("Database initialisation failed: %s", exc)
-    sweeper = asyncio.create_task(_sweep_closed_windows())
-    yield
-    sweeper.cancel()
-    await get_manager().shutdown()
+    sweepers = [
+        asyncio.create_task(_sweep_closed_windows()),
+        asyncio.create_task(_sweep_expired_rag_chunks()),
+    ]
+    try:
+        yield
+    finally:
+        for sweeper in sweepers:
+            sweeper.cancel()
+        await asyncio.gather(*sweepers, return_exceptions=True)
+        await get_manager().shutdown()
 
 
 def create_app() -> FastAPI:
